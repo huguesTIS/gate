@@ -254,6 +254,7 @@ mod tests {
             valid_until: Set(None),
             priority: Set(0),
             active: Set(true),
+            login_template: Set(None),
         }
         .insert(&db)
         .await
@@ -293,6 +294,7 @@ mod tests {
             valid_until: Set(Some(OffsetDateTime::now_utc() - Duration::days(1))),
             priority: Set(0),
             active: Set(true),
+            login_template: Set(None),
         }
         .insert(&db)
         .await
@@ -319,6 +321,7 @@ mod tests {
             valid_until: Set(None),
             priority: Set(0),
             active: Set(true),
+            login_template: Set(None),
         }
         .insert(&db)
         .await
@@ -355,6 +358,7 @@ mod tests {
             valid_until: Set(None),
             priority: Set(0),
             active: Set(true),
+            login_template: Set(None),
         }
         .insert(&db)
         .await

@@ -923,6 +923,15 @@ impl RemoteClient {
                     );
                 }
             }
+            SSHTargetAuth::Requester(_) => {
+                // Relaying the connecting user's own credential to the target
+                // isn't implemented yet — see `ARCHITECTURE_TECHNIQUE.md` §10
+                // ("Mode Requester"). Fail clearly rather than silently falling
+                // back to some other auth method.
+                auth_error_msg = Some(
+                    "Requester-mode SSH targets are not yet supported by this deployment".into(),
+                );
+            }
         }
 
         if !auth_result {

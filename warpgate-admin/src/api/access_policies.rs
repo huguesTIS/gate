@@ -6,6 +6,7 @@ use sea_orm::{
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
+use warpgate_common::helpers::login_template::LoginNameTemplate;
 use warpgate_common::{AdminPermission, WarpgateError};
 use warpgate_core::logging::AuditEvent;
 use warpgate_db_entities::ActionDefinition::ActionKind;
@@ -23,6 +24,9 @@ struct AccessPolicyDataRequest {
     valid_until: Option<OffsetDateTime>,
     priority: i32,
     active: bool,
+    /// Effective target login name for Requester/Managed connections; `None` =
+    /// portal username as-is. See `ARCHITECTURE_TECHNIQUE.md` §10 ("Mode Requester").
+    login_template: Option<LoginNameTemplate>,
     /// `Grant` actions this policy triggers when it authorizes a session. Their
     /// paired `Remove` is scheduled automatically — not listed here separately.
     action_definition_ids: Vec<Uuid>,
@@ -39,6 +43,7 @@ struct AccessPolicyResponse {
     valid_until: Option<OffsetDateTime>,
     priority: i32,
     active: bool,
+    login_template: Option<LoginNameTemplate>,
     action_definition_ids: Vec<Uuid>,
 }
 
@@ -54,6 +59,11 @@ impl AccessPolicyResponse {
             valid_until: policy.valid_until,
             priority: policy.priority,
             active: policy.active,
+            // A row with a malformed/legacy-shaped value is treated as unset
+            // rather than failing the whole response — this field is additive.
+            login_template: policy
+                .login_template
+                .and_then(|v| serde_json::from_value(v).ok()),
             action_definition_ids,
         }
     }
@@ -184,6 +194,11 @@ impl ListApi {
             valid_until: Set(body.valid_until),
             priority: Set(body.priority),
             active: Set(body.active),
+            login_template: Set(body
+                .login_template
+                .as_ref()
+                .map(serde_json::to_value)
+                .transpose()?),
         }
         .insert(db)
         .await?;
@@ -288,6 +303,11 @@ impl DetailApi {
         policy.valid_until = Set(body.valid_until);
         policy.priority = Set(body.priority);
         policy.active = Set(body.active);
+        policy.login_template = Set(body
+            .login_template
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()?);
         let policy = policy.update(db).await?;
 
         sync_policy_actions(db, id.0, &body.action_definition_ids).await?;

@@ -87,6 +87,7 @@ mod m00080_audit_log_immutability;
 mod m00081_governance_admin_permission;
 mod m00082_managed_accounts;
 mod m00083_user_group_membership_expiry;
+mod m00084_access_policy_login_template;
 
 pub(crate) mod helpers;
 
@@ -179,6 +180,7 @@ impl MigratorTrait for Migrator {
             Box::new(m00081_governance_admin_permission::Migration),
             Box::new(m00082_managed_accounts::Migration),
             Box::new(m00083_user_group_membership_expiry::Migration),
+            Box::new(m00084_access_policy_login_template::Migration),
         ]
     }
 }

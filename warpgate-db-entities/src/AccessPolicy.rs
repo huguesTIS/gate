@@ -25,6 +25,10 @@ pub struct Model {
     /// Higher wins when multiple policies disagree on the same user/target pair.
     pub priority: i32,
     pub active: bool,
+    /// Effective target login name for Requester/Managed connections governed by
+    /// this policy, serialized `warpgate_common::helpers::login_template::LoginNameTemplate`.
+    /// `None` = use the portal username as-is.
+    pub login_template: Option<serde_json::Value>,
 }
 
 impl Model {

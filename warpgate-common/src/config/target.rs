@@ -53,6 +53,14 @@ pub enum SSHTargetAuth {
     PublicKey(SshTargetPublicKeyAuth),
     #[serde(rename = "iam_role")]
     IamRole(SshTargetIamRoleAuth),
+    /// The connecting user's own already-valid target account — Warpgate stores
+    /// nothing here. The effective login name comes from the matching
+    /// `access_policies.login_template` (falls back to the portal username if
+    /// unset). See `ARCHITECTURE_TECHNIQUE.md` §10 ("Mode Requester") — the
+    /// credential-relay mechanism this depends on isn't built yet, so this
+    /// variant exists but isn't reachable from a real connection yet.
+    #[serde(rename = "requester")]
+    Requester(SshTargetRequesterAuth),
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Object)]
@@ -70,6 +78,9 @@ pub struct SshTargetPublicKeyAuth {
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Object, Default)]
 pub struct SshTargetIamRoleAuth {}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Object, Default)]
+pub struct SshTargetRequesterAuth {}
 
 impl Default for SSHTargetAuth {
     fn default() -> Self {
