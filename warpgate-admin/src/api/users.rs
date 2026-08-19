@@ -7,6 +7,7 @@ use sea_orm::{
 use time::OffsetDateTime;
 use tracing::warn;
 use uuid::Uuid;
+use warpgate_common::helpers::ldap::resolve_ldap_bind_password;
 use warpgate_common::{
     AdminPermission, AdminRole as AdminRoleConfig, User as UserConfig,
     UserRequireCredentialsPolicy, WarpgateError,
@@ -383,7 +384,8 @@ impl DetailApi {
         let mut ldap_object_uuid = None;
 
         for ldap_server in ldap_servers {
-            let ldap_config = warpgate_ldap::LdapConfig::try_from(&ldap_server)?;
+            let mut ldap_config = warpgate_ldap::LdapConfig::try_from(&ldap_server)?;
+            resolve_ldap_bind_password(&mut ldap_config).await?;
 
             match warpgate_ldap::find_user_by_username(&ldap_config, username).await {
                 Ok(Some(ldap_user)) => {

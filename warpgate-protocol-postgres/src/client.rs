@@ -128,6 +128,7 @@ impl PostgresClient {
             warpgate_common::DatabaseTargetAuth::Password(auth) => auth
                 .password
                 .reveal()
+                .await
                 .map_err(WarpgateError::from)?
                 .expose_secret()
                 .clone(),

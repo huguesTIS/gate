@@ -61,6 +61,26 @@ async fn spawn_supervisor(
     ))
 }
 
+/// Dev-only wiring, matches `warpgate-vault`'s own env-var config (see
+/// `ARCHITECTURE_TECHNIQUE.md` §10) — not yet in `WarpgateConfig`. A no-op unless
+/// `OPENBAO_ADDR` is set, so this changes nothing for a deployment that hasn't
+/// opted in.
+fn install_vault_resolver_if_configured() {
+    if std::env::var_os("OPENBAO_ADDR").is_none() {
+        return;
+    }
+    match warpgate_vault::OpenBaoResolver::from_env() {
+        Ok(resolver) => {
+            warpgate_common::install_vault_resolver(std::sync::Arc::new(resolver));
+            info!("Vault-backed secret storage enabled (OpenBao)");
+        }
+        Err(error) => {
+            error!(?error, "OPENBAO_ADDR is set, but the vault client could not be configured");
+            std::process::exit(1);
+        }
+    }
+}
+
 pub async fn command(params: &GlobalParams, enable_admin_token: bool) -> Result<()> {
     let version = warpgate_version();
     info!(%version, "Warpgate");
@@ -83,6 +103,7 @@ pub async fn command(params: &GlobalParams, enable_admin_token: bool) -> Result<
     let services = Services::new(config.clone(), admin_token, params.clone()).await?;
 
     validate_encryption_config(&config);
+    install_vault_resolver_if_configured();
 
     // Join the cluster before the credential backfill below
     services.cluster.start().await?;

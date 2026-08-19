@@ -42,6 +42,8 @@ pub enum EncryptionError {
     Corrupt,
     #[error("credential could not be encrypted")]
     EncryptionFailed,
+    #[error("credential could not be reached in the external vault: {0}")]
+    VaultError(String),
 }
 
 pub struct MasterKey {
@@ -304,8 +306,23 @@ pub fn is_envelope(value: &str) -> bool {
     envelope_parts(value).is_some()
 }
 
+/// Prefix marking a value as a reference into an external vault (see
+/// `warpgate_common::vault_resolver` / `StoredSecret`) rather than a secret stored
+/// in this database, plaintext or encrypted. Recognized here so a reference
+/// round-trips unchanged through every (re)encryption pass below — this module has
+/// no notion of what backend a reference points to, only that it must never treat
+/// one as plaintext to encrypt.
+pub const VAULT_REF_PREFIX: &str = "vaultref:v1:";
+
+pub fn is_vault_reference(value: &str) -> bool {
+    value.starts_with(VAULT_REF_PREFIX)
+}
+
 /// Encrypt if encryption is enabled and value is plaintext
 pub fn idempotent_maybe_encrypt_secret(value: &str) -> Result<String, EncryptionError> {
+    if is_vault_reference(value) {
+        return Ok(value.to_owned());
+    }
     match env_keyring().primary() {
         Some(key) if !is_envelope(value) => key.encrypt(value),
         _ => Ok(value.to_owned()),
@@ -314,14 +331,18 @@ pub fn idempotent_maybe_encrypt_secret(value: &str) -> Result<String, Encryption
 
 /// Decrypt if encrypted, else passthrough
 pub fn idempotent_maybe_decrypt(value: &str) -> Result<String, EncryptionError> {
-    {
-        let ring: &Keyring = env_keyring();
-        ring.decrypt(value)
+    if is_vault_reference(value) {
+        return Ok(value.to_owned());
     }
+    let ring: &Keyring = env_keyring();
+    ring.decrypt(value)
 }
 
 /// Bring a stored value up to date in terms of encryption
 pub fn maybe_reencrypt_str(value: &str) -> Result<String, EncryptionError> {
+    if is_vault_reference(value) {
+        return Ok(value.to_owned());
+    }
     env_keyring().reencrypt(value)
 }
 

@@ -8,11 +8,30 @@ use poem_openapi::registry::{MetaSchemaRef, Registry};
 use poem_openapi::types::{ParseError, ParseFromJSON, ToJSON};
 use rand::RngExt;
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
 
 use crate::helpers::rng::get_crypto_rng;
 
+/// `T: Zeroize` is a bound on the struct itself, not just on `Drop` below —
+/// Rust requires a `Drop` impl's generic parameters and bounds to match the
+/// struct's exactly (E0366/E0367: neither a narrower concrete type nor an extra
+/// bound on just the `Drop` impl is allowed). The two concrete instantiations
+/// actually used in this codebase (`Secret<String>`, `Secret<Vec<u8>>` via
+/// `OtpSecretKey`) both satisfy it; a new `Secret<SomeType>` would need
+/// `SomeType: Zeroize` too.
 #[derive(PartialEq, Eq, Clone)]
-pub struct Secret<T>(T);
+pub struct Secret<T: Zeroize>(T);
+
+/// Zeroes the plaintext on drop. Narrows, but does not close, the window in which
+/// a process with live memory access (core dump, ptrace) could recover a secret
+/// after use — it cannot protect a secret being actively used at the moment of
+/// capture, which is a limit of any proxy that must hold plaintext to authenticate
+/// with a target, not something fixable at this layer.
+impl<T: Zeroize> Drop for Secret<T> {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
 
 impl Secret<String> {
     pub fn random() -> Self {
@@ -20,7 +39,7 @@ impl Secret<String> {
     }
 }
 
-impl<T> Secret<T> {
+impl<T: Zeroize> Secret<T> {
     pub const fn new(v: T) -> Self {
         Self(v)
     }
@@ -30,13 +49,13 @@ impl<T> Secret<T> {
     }
 }
 
-impl<T> From<T> for Secret<T> {
+impl<T: Zeroize> From<T> for Secret<T> {
     fn from(v: T) -> Self {
         Self::new(v)
     }
 }
 
-impl<'de, T> Deserialize<'de> for Secret<T>
+impl<'de, T: Zeroize> Deserialize<'de> for Secret<T>
 where
     T: Deserialize<'de>,
 {
@@ -49,7 +68,7 @@ where
     }
 }
 
-impl<T> Serialize for Secret<T>
+impl<T: Zeroize> Serialize for Secret<T>
 where
     T: Serialize,
 {
@@ -61,13 +80,13 @@ where
     }
 }
 
-impl<T> Debug for Secret<T> {
+impl<T: Zeroize> Debug for Secret<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "<secret>")
     }
 }
 
-impl<T: poem_openapi::types::Type> poem_openapi::types::Type for Secret<T> {
+impl<T: Zeroize + poem_openapi::types::Type> poem_openapi::types::Type for Secret<T> {
     const IS_REQUIRED: bool = T::IS_REQUIRED;
     type RawValueType = T::RawValueType;
     type RawElementValueType = T::RawElementValueType;
@@ -94,7 +113,7 @@ impl<T: poem_openapi::types::Type> poem_openapi::types::Type for Secret<T> {
     }
 }
 
-impl<T: ParseFromJSON> ParseFromJSON for Secret<T> {
+impl<T: Zeroize + ParseFromJSON> ParseFromJSON for Secret<T> {
     fn parse_from_json(value: Option<serde_json::Value>) -> poem_openapi::types::ParseResult<Self> {
         T::parse_from_json(value)
             .map(Self::new)
@@ -102,7 +121,7 @@ impl<T: ParseFromJSON> ParseFromJSON for Secret<T> {
     }
 }
 
-impl<T: ToJSON> ToJSON for Secret<T> {
+impl<T: Zeroize + ToJSON> ToJSON for Secret<T> {
     fn to_json(&self) -> Option<serde_json::Value> {
         self.0.to_json()
     }

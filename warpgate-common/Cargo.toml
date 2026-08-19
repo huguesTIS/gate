@@ -64,3 +64,4 @@ warpgate-sso = { path = "../warpgate-sso" }
 warpgate-tls = { path = "../warpgate-tls" }
 webpki = { version = "0.22", default-features = false }
 x509-parser = { version = "0.18.1", default-features = false }
+zeroize.workspace = true

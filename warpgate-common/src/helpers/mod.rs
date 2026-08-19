@@ -1,6 +1,7 @@
 pub mod fs;
 pub mod hash;
 pub mod ipnet;
+pub mod ldap;
 pub mod locks;
 pub mod logging;
 pub mod net;

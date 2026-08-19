@@ -480,6 +480,35 @@ pub fn map_target_secrets(
     Ok(())
 }
 
+/// Async sibling of `map_target_secrets`, for the one write path that may need to
+/// reach an external vault (see `externalize_secret`). Duplicates the (small)
+/// path-walk rather than making `map_target_secrets` generic over async closures,
+/// so every other caller (redaction, the reencryption backfill job) keeps working
+/// exactly as before, untouched.
+pub async fn map_target_secrets_async<F, Fut>(
+    options: &mut serde_json::Value,
+    mut f: F,
+) -> Result<(), EncryptionError>
+where
+    F: FnMut(String) -> Fut,
+    Fut: std::future::Future<Output = Result<String, EncryptionError>>,
+{
+    fn resolve<'a>(
+        node: &'a mut serde_json::Value,
+        path: &[&str],
+    ) -> Option<&'a mut serde_json::Value> {
+        path.iter().try_fold(node, |node, step| node.get_mut(step))
+    }
+
+    for path in SECRET_PATHS {
+        if let Some(serde_json::Value::String(value)) = resolve(options, path) {
+            let replacement = f(value.clone()).await?;
+            *value = replacement;
+        }
+    }
+    Ok(())
+}
+
 /// Blanks out every secret in a serialized TargetOptions or Target (same JSON paths as options are serde(flatten))
 pub fn redact_target_secrets(value: &mut serde_json::Value) {
     // The closure is infallible, so the walk is too.

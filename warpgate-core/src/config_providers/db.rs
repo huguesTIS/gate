@@ -14,6 +14,7 @@ use warpgate_common::auth::{
     CredentialPolicy, PerProtocolCredentialPolicy,
 };
 use warpgate_common::helpers::hash::{hash_secret, verify_password_hash};
+use warpgate_common::helpers::ldap::resolve_ldap_bind_password;
 use warpgate_common::helpers::otp::verify_totp;
 use warpgate_common::{
     Protocol, Target, User, UserAuthCredential, UserPasswordCredential, UserPublicKeyCredential,
@@ -112,7 +113,8 @@ impl DatabaseConfigProvider {
             return Ok(());
         }
 
-        let ldap_config = warpgate_ldap::LdapConfig::try_from(&ldap_server)?;
+        let mut ldap_config = warpgate_ldap::LdapConfig::try_from(&ldap_server)?;
+        resolve_ldap_bind_password(&mut ldap_config).await?;
 
         // Find user in LDAP by object UUID
         let ldap_user = warpgate_ldap::find_user_by_uuid(&ldap_config, ldap_object_uuid).await?;
@@ -188,13 +190,14 @@ impl DatabaseConfigProvider {
         let mut ldap_object_uuid = None;
 
         for ldap_server in ldap_servers {
-            let ldap_config = warpgate_ldap::LdapConfig::try_from(&ldap_server).map_err(|e| {
+            let mut ldap_config = warpgate_ldap::LdapConfig::try_from(&ldap_server).map_err(|e| {
                 warn!(
                     "Failed to parse LDAP config for server {}: {}",
                     ldap_server.name, e
                 );
                 e
             })?;
+            resolve_ldap_bind_password(&mut ldap_config).await?;
 
             match warpgate_ldap::find_user_by_username(&ldap_config, &preferred_username).await {
                 Ok(Some(ldap_user)) => {

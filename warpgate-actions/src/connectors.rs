@@ -10,6 +10,7 @@ pub mod ldap_group {
     use sea_orm::{DatabaseConnection, EntityTrait};
     use serde::Deserialize;
     use warpgate_common::WarpgateError;
+    use warpgate_common::helpers::ldap::resolve_ldap_bind_password;
     use warpgate_db_entities::LdapServer;
 
     #[derive(Debug, Deserialize)]
@@ -35,7 +36,8 @@ pub mod ldap_group {
                 config.ldap_server_id
             )));
         };
-        let ldap_config: warpgate_ldap::LdapConfig = (&server).try_into()?;
+        let mut ldap_config: warpgate_ldap::LdapConfig = (&server).try_into()?;
+        resolve_ldap_bind_password(&mut ldap_config).await?;
         let member_dn = config.member_dn_template.replace("{username}", username);
         Ok((ldap_config, config.group_dn, member_dn))
     }

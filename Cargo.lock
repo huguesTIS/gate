@@ -8939,6 +8939,7 @@ dependencies = [
  "warpgate-protocol-ssh",
  "warpgate-protocol-vnc",
  "warpgate-tls",
+ "warpgate-vault",
 ]
 
 [[package]]
@@ -9014,6 +9015,7 @@ dependencies = [
  "warpgate-protocol-kubernetes",
  "warpgate-protocol-ssh",
  "warpgate-tls",
+ "warpgate-vault",
 ]
 
 [[package]]
@@ -9117,6 +9119,7 @@ dependencies = [
  "warpgate-tls",
  "webpki",
  "x509-parser",
+ "zeroize",
 ]
 
 [[package]]
@@ -9554,6 +9557,21 @@ dependencies = [
  "warpgate-ca",
  "webpki",
  "x509-parser",
+]
+
+[[package]]
+name = "warpgate-vault"
+version = "0.28.0-beta.4"
+dependencies = [
+ "async-trait",
+ "reqwest 0.13.4",
+ "rustls 0.23.43",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+ "warpgate-common",
 ]
 
 [[package]]

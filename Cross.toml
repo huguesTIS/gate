@@ -1,2 +1,8 @@
 [target.x86_64-unknown-linux-gnu]
 pre-build = ["apt-get update && apt-get install --assume-yes libz-dev"]
+
+[build.env]
+# Lets `OPENBAO_ADDR`/`OPENBAO_TOKEN`/`OPENBAO_MOUNT` reach `cargo test -- --ignored`
+# inside the container when running warpgate-vault's live-OpenBao integration test —
+# see its module docs. No-op unless those vars are actually set on the host.
+passthrough = ["OPENBAO_ADDR", "OPENBAO_TOKEN", "OPENBAO_MOUNT"]

@@ -6,10 +6,11 @@ use sea_orm::{
 };
 use time::OffsetDateTime;
 use uuid::Uuid;
-use warpgate_common::{AdminPermission, WarpgateError};
+use warpgate_common::{AdminPermission, Secret, WarpgateError};
 use warpgate_core::logging::AuditEvent;
 use warpgate_db_entities::ManagedAccount::ManagedAccountCredentialMode;
 use warpgate_db_entities::{ManagedAccount, Target, UserGroup};
+use warpgate_vault::VaultConfig;
 
 use super::AdminContext;
 
@@ -272,5 +273,122 @@ impl DetailApi {
         .emit();
 
         Ok(DeleteManagedAccountResponse::Deleted)
+    }
+}
+
+#[derive(Object)]
+struct SetManagedAccountSecretRequest {
+    value: Secret<String>,
+}
+
+#[derive(ApiResponse)]
+enum SetManagedAccountSecretResponse {
+    #[oai(status = 204)]
+    Set,
+    #[oai(status = 404)]
+    NotFound,
+    #[oai(status = 502)]
+    VaultError(Json<String>),
+}
+
+#[derive(ApiResponse)]
+enum DeleteManagedAccountSecretResponse {
+    #[oai(status = 204)]
+    Deleted,
+    #[oai(status = 404)]
+    NotFound,
+    #[oai(status = 502)]
+    VaultError(Json<String>),
+}
+
+/// Sets/deletes a managed account's secret **value** in OpenBao — the value itself
+/// never touches Warpgate's own DB, not even encrypted (see `ARCHITECTURE_TECHNIQUE.md`
+/// §10, "`managed_accounts` — pas de secret local"). No GET here on purpose: the row's
+/// `secret_ref` is meant to be consumed by Warpgate itself (connectors) at connection
+/// time, not re-read by an admin through this API.
+pub struct SecretApi;
+
+#[OpenApi]
+impl SecretApi {
+    #[oai(
+        path = "/managed-accounts/:id/secret",
+        method = "put",
+        operation_id = "set_managed_account_secret"
+    )]
+    async fn api_set_secret(
+        &self,
+        admin: AdminContext,
+        id: Path<Uuid>,
+        body: Json<SetManagedAccountSecretRequest>,
+    ) -> Result<SetManagedAccountSecretResponse, WarpgateError> {
+        admin.require(AdminPermission::GovernanceManage)?;
+
+        let db = &admin.services().db;
+        let Some(account) = ManagedAccount::Entity::find_by_id(id.0).one(db).await? else {
+            return Ok(SetManagedAccountSecretResponse::NotFound);
+        };
+
+        let vault = match VaultConfig::from_env() {
+            Ok(v) => v,
+            Err(err) => return Ok(SetManagedAccountSecretResponse::VaultError(Json(err.to_string()))),
+        };
+        let secret_ref = format!("managed-accounts/{}", account.id);
+        if let Err(err) = warpgate_vault::write_secret_value(&vault, &secret_ref, &body.value).await
+        {
+            return Ok(SetManagedAccountSecretResponse::VaultError(Json(
+                err.to_string(),
+            )));
+        }
+
+        if account.secret_ref.as_deref() != Some(secret_ref.as_str()) {
+            let mut account: ManagedAccount::ActiveModel = account.into();
+            account.secret_ref = Set(Some(secret_ref));
+            account.updated_at = Set(OffsetDateTime::now_utc());
+            account.update(db).await?;
+        }
+
+        Ok(SetManagedAccountSecretResponse::Set)
+    }
+
+    #[oai(
+        path = "/managed-accounts/:id/secret",
+        method = "delete",
+        operation_id = "delete_managed_account_secret"
+    )]
+    async fn api_delete_secret(
+        &self,
+        admin: AdminContext,
+        id: Path<Uuid>,
+    ) -> Result<DeleteManagedAccountSecretResponse, WarpgateError> {
+        admin.require(AdminPermission::GovernanceManage)?;
+
+        let db = &admin.services().db;
+        let Some(account) = ManagedAccount::Entity::find_by_id(id.0).one(db).await? else {
+            return Ok(DeleteManagedAccountSecretResponse::NotFound);
+        };
+        let Some(secret_ref) = account.secret_ref.clone() else {
+            return Ok(DeleteManagedAccountSecretResponse::Deleted);
+        };
+
+        let vault = match VaultConfig::from_env() {
+            Ok(v) => v,
+            Err(err) => {
+                return Ok(DeleteManagedAccountSecretResponse::VaultError(Json(
+                    err.to_string(),
+                )));
+            }
+        };
+        if let Err(err) = warpgate_vault::delete_secret(&vault, &secret_ref).await {
+            return Ok(DeleteManagedAccountSecretResponse::VaultError(Json(
+                err.to_string(),
+            )));
+        }
+
+        let mut account: ManagedAccount::ActiveModel = account.into();
+        account.secret_ref = Set(None);
+        account.updated_at = Set(OffsetDateTime::now_utc());
+        account.update(db).await?;
+
+        Ok(DeleteManagedAccountSecretResponse::Deleted)
     }
 }

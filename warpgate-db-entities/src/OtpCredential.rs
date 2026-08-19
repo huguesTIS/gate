@@ -39,6 +39,11 @@ impl Related<super::User::Entity> for Entity {
 
 impl ActiveModelBehavior for ActiveModel {}
 
+/// Not used to load a credential for actual verification — `secret_key` may be a
+/// vault reference or an envelope, not the raw seed; use
+/// `warpgate_common::helpers::otp::resolve_otp_key` for that (see
+/// `User::load_details`). Kept as a plain structural conversion since some callers
+/// only need the row shape, not a usable key.
 impl From<Model> for UserTotpCredential {
     fn from(credential: Model) -> Self {
         Self {
@@ -53,6 +58,10 @@ impl From<Model> for UserAuthCredential {
     }
 }
 
+/// Not used to persist a credential — stores the raw seed with no externalization
+/// (vault-or-envelope). Use `warpgate_common::helpers::otp::externalize_otp_key`
+/// and set `secret_key` explicitly instead (see the `/profile/credentials/otp` and
+/// admin OTP-credential endpoints).
 impl From<UserTotpCredential> for ActiveModel {
     fn from(credential: UserTotpCredential) -> Self {
         Self {

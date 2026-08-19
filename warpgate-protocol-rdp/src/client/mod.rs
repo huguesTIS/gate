@@ -88,7 +88,7 @@ pub async fn run(
     // the same bounds the Display Control resize path enforces.
     let (width, height) =
         MonitorLayoutEntry::adjust_display_size(u32::from(width), u32::from(height));
-    let password = auth.password.reveal()?;
+    let password = auth.password.reveal().await?;
     let config = build_config(
         &options,
         password.expose_secret(),

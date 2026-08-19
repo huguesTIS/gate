@@ -804,7 +804,7 @@ impl RemoteClient {
         let mut auth_error_msg: Option<String> = None;
         match auth {
             SSHTargetAuth::Password(auth) => {
-                let password = auth.password.reveal().map_err(WarpgateError::from)?;
+                let password = auth.password.reveal().await.map_err(WarpgateError::from)?;
                 let response = session
                     .authenticate_password(username.to_string(), password.expose_secret())
                     .await?;

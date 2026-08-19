@@ -7,8 +7,9 @@ use poem_openapi::{ApiResponse, Enum, Object, OpenApi};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, ModelTrait, QueryFilter, Set};
 use time::OffsetDateTime;
 use uuid::Uuid;
+use warpgate_common::helpers::otp::externalize_otp_key;
 use warpgate_common::{
-    PasswordPolicy, PasswordPolicyViolation, User, UserPasswordCredential,
+    PasswordPolicy, PasswordPolicyViolation, Secret, User, UserPasswordCredential,
     UserRequireCredentialsPolicy, WarpgateError, validate_password,
 };
 use warpgate_common_http::auth::UnauthenticatedRequestContext;
@@ -487,10 +488,11 @@ impl Api {
         let username = user.username.clone();
         let mut user_cfg: User = user.clone().try_into()?;
 
+        let secret_key = externalize_otp_key(&Secret::new(body.secret_key.clone())).await?;
         let object = entities::OtpCredential::ActiveModel {
             id: Set(Uuid::new_v4()),
             user_id: Set(user_id),
-            secret_key: Set(body.secret_key.clone()),
+            secret_key: Set(secret_key),
         }
         .insert(db)
         .await

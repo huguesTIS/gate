@@ -3,6 +3,7 @@ use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, OpenApi};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, ModelTrait, QueryFilter, Set};
 use uuid::Uuid;
+use warpgate_common::helpers::otp::externalize_otp_key;
 use warpgate_common::{AdminPermission, UserTotpCredential, WarpgateError};
 use warpgate_core::logging::{AuditEvent, CredentialChangedVia};
 use warpgate_db_entities::{OtpCredential, User};
@@ -90,10 +91,13 @@ impl ListApi {
 
         let db = &admin.services().db;
 
+        let credential = UserTotpCredential::from(&*body);
+        let secret_key = externalize_otp_key(&credential.key).await?;
+
         let object = OtpCredential::ActiveModel {
             id: Set(Uuid::new_v4()),
             user_id: Set(*user_id),
-            ..OtpCredential::ActiveModel::from(UserTotpCredential::from(&*body))
+            secret_key: Set(secret_key),
         }
         .insert(db)
         .await

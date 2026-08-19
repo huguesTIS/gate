@@ -9,6 +9,7 @@ members = [
     "warpgate-common",
     "warpgate-common-http",
     "warpgate-tls",
+    "warpgate-vault",
     "warpgate-core",
     "warpgate-desktop-auth",
     "warpgate-db-migrations",
@@ -158,6 +159,7 @@ rcgen = { version = "0.14", features = [
     "x509-parser",
 ], default-features = false }
 x509-parser = { version = "0.18.1", default-features = false }
+zeroize = { version = "1.9", default-features = false }
 uuid = { version = "1.23", features = [
     "v4",
     "serde",
@@ -221,4 +223,19 @@ hint-mostly-unused = true
 hint-mostly-unused = true
 
 [profile.release.package.aws-sdk-s3]
+hint-mostly-unused = true
+
+# `warpgate-aws` also pulls these two (IAM auth-token generation only, same
+# mostly-unused-API-surface shape as the four above) but they were missing this
+# hint — same rationale, matching the existing pattern.
+[profile.dev.package.aws-sdk-ec2instanceconnect]
+hint-mostly-unused = true
+
+[profile.release.package.aws-sdk-ec2instanceconnect]
+hint-mostly-unused = true
+
+[profile.dev.package.aws-sdk-sts]
+hint-mostly-unused = true
+
+[profile.release.package.aws-sdk-sts]
 hint-mostly-unused = true

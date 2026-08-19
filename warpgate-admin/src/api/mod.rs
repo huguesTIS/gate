@@ -95,7 +95,11 @@ pub fn get() -> impl OpenApi {
             (user_groups::ListApi, user_groups::DetailApi, user_groups::MembersApi),
             (access_policies::ListApi, access_policies::DetailApi),
             (action_definitions::ListApi, action_definitions::DetailApi),
-            (managed_accounts::ListApi, managed_accounts::DetailApi),
+            (
+                managed_accounts::ListApi,
+                managed_accounts::DetailApi,
+                managed_accounts::SecretApi,
+            ),
             target_labels::LabelsApi,
         ),
     )

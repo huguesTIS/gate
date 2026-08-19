@@ -7,7 +7,7 @@ use sea_orm::entity::prelude::*;
 use sea_orm::sea_query::{Func, IntoCondition};
 use serde::Serialize;
 use uuid::Uuid;
-use warpgate_common::{User, UserDetails, WarpgateError};
+use warpgate_common::{User, UserAuthCredential, UserDetails, UserTotpCredential, WarpgateError};
 
 use crate::{
     CertificateCredential, OtpCredential, PasswordCredential, PublicKeyCredential, Role,
@@ -187,13 +187,10 @@ impl Model {
             .collect();
 
         let mut credentials = vec![];
-        credentials.extend(
-            self.find_related(OtpCredential::Entity)
-                .all(db)
-                .await?
-                .into_iter()
-                .map(Into::into),
-        );
+        for otp_model in self.find_related(OtpCredential::Entity).all(db).await? {
+            let key = warpgate_common::helpers::otp::resolve_otp_key(&otp_model.secret_key).await?;
+            credentials.push(UserAuthCredential::Totp(UserTotpCredential { key }));
+        }
         credentials.extend(
             self.find_related(PasswordCredential::Entity)
                 .all(db)

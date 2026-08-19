@@ -5,7 +5,8 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, EntityTrait, ModelTrait, QueryFilter, QueryOrder, Set,
 };
 use uuid::Uuid;
-use warpgate_common::{AdminPermission, Secret, WarpgateError};
+use warpgate_common::helpers::ldap::resolve_ldap_bind_password;
+use warpgate_common::{AdminPermission, Secret, WarpgateError, externalize_secret};
 use warpgate_db_entities::LdapServer;
 use warpgate_ldap::LdapUsernameAttribute;
 use warpgate_tls::TlsMode;
@@ -54,7 +55,8 @@ impl ImportApi {
         let Some(server) = LdapServer::Entity::find_by_id(id.0).one(db).await? else {
             return Ok(ImportLdapUsersResponse::NotFound);
         };
-        let ldap_config = warpgate_ldap::LdapConfig::try_from(&server)?;
+        let mut ldap_config = warpgate_ldap::LdapConfig::try_from(&server)?;
+        resolve_ldap_bind_password(&mut ldap_config).await?;
         let all_users = warpgate_ldap::list_users(&ldap_config).await?;
         let mut imported = Vec::new();
         for dn in &body.dns {
@@ -378,7 +380,7 @@ impl ListApi {
             host: Set(body.host.clone()),
             port: Set(body.port),
             bind_dn: Set(body.bind_dn.clone()),
-            bind_password: Set(body.bind_password.expose_secret().clone()),
+            bind_password: Set(externalize_secret(body.bind_password.expose_secret()).await?),
             user_filter: Set(body.user_filter.clone()),
             base_dns: Set(base_dns_json),
             tls_mode: Set(String::from(body.tls_mode)),
@@ -543,7 +545,7 @@ impl DetailApi {
         model.port = Set(body.port);
         model.bind_dn = Set(body.bind_dn.clone());
         if let Some(password) = &body.bind_password {
-            model.bind_password = Set(password.expose_secret().clone());
+            model.bind_password = Set(externalize_secret(password.expose_secret()).await?);
         }
         model.user_filter = Set(body.user_filter.clone());
         model.tls_mode = Set(String::from(body.tls_mode));
@@ -555,8 +557,11 @@ impl DetailApi {
         model.ssh_key_attribute = Set(body.ssh_key_attribute.clone());
         model.uuid_attribute = Set(body.uuid_attribute.clone());
 
-        // Re-discover base DNs if connection details changed
-        let ldap_config = warpgate_ldap::LdapConfig {
+        // Re-discover base DNs if connection details changed. When the admin didn't
+        // submit a new password, the row's *original* (pre-this-request) value is
+        // reused — which may be a vault reference or envelope from an earlier save,
+        // so it needs resolving before it can be used as a literal bind password.
+        let mut ldap_config = warpgate_ldap::LdapConfig {
             host: body.host.clone(),
             port: body.port as u16,
             bind_dn: body.bind_dn.clone(),
@@ -572,6 +577,9 @@ impl DetailApi {
             ssh_key_attribute: body.ssh_key_attribute.clone(),
             uuid_attribute: None,
         };
+        if body.bind_password.is_none() {
+            resolve_ldap_bind_password(&mut ldap_config).await?;
+        }
 
         if let Ok(base_dns) = warpgate_ldap::discover_base_dns(&ldap_config).await {
             model.base_dns = Set(serde_json::to_value(&base_dns)?);
@@ -647,7 +655,8 @@ impl QueryApi {
             return Ok(GetLdapUsersResponse::Ok(Json(vec![])));
         }
 
-        let ldap_config = warpgate_ldap::LdapConfig::try_from(&server)?;
+        let mut ldap_config = warpgate_ldap::LdapConfig::try_from(&server)?;
+        resolve_ldap_bind_password(&mut ldap_config).await?;
         let users = match warpgate_ldap::list_users(&ldap_config).await {
             Ok(users) => users,
             Err(e) => {
