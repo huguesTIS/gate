@@ -1,0 +1,20 @@
+[package]
+name = "warpgate-access"
+version = "0.28.0-beta.4"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+sea-orm.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+warpgate-common = { path = "../warpgate-common" }
+warpgate-db-entities = { path = "../warpgate-db-entities" }
+
+[dev-dependencies]
+sea-orm = { workspace = true, features = ["sqlx-sqlite"] }
+tokio = { workspace = true, features = ["macros", "rt"] }

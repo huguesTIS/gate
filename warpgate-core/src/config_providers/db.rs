@@ -690,12 +690,15 @@ impl ConfigProvider for DatabaseConfigProvider {
         Ok(authorized)
     }
 
+    /// Authorized if either the legacy `Role` assignment allows it, or an
+    /// `access_policies` rule does (see `warpgate-access`). Additive during the
+    /// migration window — see `ARCHITECTURE_TECHNIQUE.md` §06.
     async fn authorize_target_by_id(
         &self,
         user_id: Uuid,
         target_id: Uuid,
     ) -> Result<bool, WarpgateError> {
-        active_role_assignment_query()
+        let via_role = active_role_assignment_query()
             .and_where(
                 Expr::col((
                     entities::UserRoleAssignment::Entity,
@@ -711,7 +714,13 @@ impl ConfigProvider for DatabaseConfigProvider {
                 .eq(target_id),
             )
             .exists(&self.db)
-            .await
+            .await?;
+
+        if via_role {
+            return Ok(true);
+        }
+
+        warpgate_access::is_authorized(&self.db, user_id, target_id).await
     }
 
     async fn authorized_target_ids(&self, user_id: Uuid) -> Result<HashSet<Uuid>, WarpgateError> {
@@ -730,13 +739,16 @@ impl ConfigProvider for DatabaseConfigProvider {
             )
             .to_owned();
 
-        self.db
+        let mut ids: HashSet<Uuid> = self
+            .db
             .query_all(self.db.get_database_backend().build(&query))
             .await?
             .iter()
             .map(|row| row.try_get_by_index(0))
-            .collect::<Result<HashSet<Uuid>, _>>()
-            .map_err(Into::into)
+            .collect::<Result<HashSet<Uuid>, _>>()?;
+
+        ids.extend(warpgate_access::authorized_target_ids(&self.db, user_id).await?);
+        Ok(ids)
     }
 
     async fn apply_sso_role_mappings(

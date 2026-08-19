@@ -8941,6 +8941,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "warpgate-access"
+version = "0.28.0-beta.4"
+dependencies = [
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+ "warpgate-common",
+ "warpgate-db-entities",
+]
+
+[[package]]
 name = "warpgate-admin"
 version = "0.28.0-beta.4"
 dependencies = [
@@ -9142,6 +9157,7 @@ dependencies = [
  "url",
  "uuid",
  "vt100",
+ "warpgate-access",
  "warpgate-aws",
  "warpgate-ca",
  "warpgate-common",
