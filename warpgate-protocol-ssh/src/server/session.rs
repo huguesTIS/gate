@@ -615,12 +615,12 @@ impl ServerSession {
                     self.disconnect_server().await;
                     return Ok(());
                 };
-                let _ = self
-                    .server_handle
+                self.server_handle
                     .lock()
                     .await
                     .set_target(authorization.target())
-                    .await;
+                    .await
+                    .context("setting target on server handle")?;
                 self.target = TargetSelection::Found(authorization);
                 // clear screen ; cursor to 1;1
                 self.emit_pty_output(b"\x1b[2J\x1b[H").await?;
@@ -2303,12 +2303,11 @@ impl ServerSession {
         authorization: Option<TargetAuthorization>,
     ) -> Result<(), WarpgateError> {
         self.user_info = Some(user_info.clone());
-        let _ = self
-            .server_handle
+        self.server_handle
             .lock()
             .await
             .set_user_info(user_info.clone())
-            .await;
+            .await?;
 
         let Some(authorization) = authorization else {
             self.target = TargetSelection::Menu;
@@ -2323,12 +2322,11 @@ impl ServerSession {
             return Ok(());
         }
 
-        let _ = self
-            .server_handle
+        self.server_handle
             .lock()
             .await
             .set_target(authorization.target())
-            .await;
+            .await?;
         self.target = TargetSelection::Found(authorization);
         Ok(())
     }
