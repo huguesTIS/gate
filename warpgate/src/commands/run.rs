@@ -260,6 +260,28 @@ pub async fn command(params: &GlobalParams, enable_admin_token: bool) -> Result<
         }
     });
 
+    // Grant/Remove action engine: reset anything left `Running` by a previous
+    // crash, then poll for `Pending` executions (mainly `Remove` actions a
+    // `set_target`/`remove_session` couldn't run inline) as the durability
+    // backstop — see `warpgate-actions` and `ARCHITECTURE_TECHNIQUE.md` §07.
+    tokio::spawn({
+        let services = services.clone();
+        async move {
+            match warpgate_actions::recover_stuck_executions(&services.db).await {
+                Ok(0) => {}
+                Ok(count) => warn!(count, "Recovered action executions stuck mid-run at startup"),
+                Err(error) => error!(?error, "Failed to recover stuck action executions"),
+            }
+            loop {
+                if let Err(error) = warpgate_actions::process_pending_actions(&services.db).await
+                {
+                    error!(?error, "Failed to process pending actions");
+                }
+                tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+            }
+        }
+    });
+
     #[cfg(target_os = "linux")]
     if let Ok(true) = sd_notify::booted() {
         use std::time::Duration;

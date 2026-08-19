@@ -124,6 +124,11 @@ impl State {
             }
         }
 
+        // Best-effort — the Remove action's row was already scheduled (`Pending`)
+        // when its Grant ran, so a failure/crash here doesn't lose it: the
+        // background `process_pending_actions` loop is the durability backstop.
+        warpgate_actions::run_post_session_actions_now(&self.db, id).await;
+
         if let Err(error) = crate::db::mark_session_ended(&self.db, id).await {
             error!(%error, %id, "Could not update session in the DB");
         }

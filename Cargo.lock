@@ -8925,6 +8925,7 @@ dependencies = [
  "tracing-log",
  "tracing-subscriber",
  "uuid",
+ "warpgate-actions",
  "warpgate-admin",
  "warpgate-ca",
  "warpgate-common",
@@ -8953,6 +8954,24 @@ dependencies = [
  "uuid",
  "warpgate-common",
  "warpgate-db-entities",
+]
+
+[[package]]
+name = "warpgate-actions"
+version = "0.28.0-beta.4"
+dependencies = [
+ "ldap3",
+ "sea-orm",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
+ "uuid",
+ "warpgate-access",
+ "warpgate-common",
+ "warpgate-db-entities",
+ "warpgate-ldap",
 ]
 
 [[package]]
@@ -9158,6 +9177,7 @@ dependencies = [
  "uuid",
  "vt100",
  "warpgate-access",
+ "warpgate-actions",
  "warpgate-aws",
  "warpgate-ca",
  "warpgate-common",

@@ -100,7 +100,10 @@ impl WarpgateServerHandle {
     pub async fn set_target(&self, target: &Target) -> Result<(), WarpgateError> {
         use sea_orm::ActiveValue::Set;
 
-        {
+        // `user_info`/`target_changed` are plain owned values by the time the lock
+        // is dropped — Pre-Session actions (LDAP calls etc.) run below, outside the
+        // lock, so a slow Grant can't stall anything else reading this session's state.
+        let (user_info, target_changed) = {
             let mut state = self.session_state.lock().await;
             if state.target.as_ref() == Some(target) {
                 return Ok(());
@@ -126,16 +129,29 @@ impl WarpgateServerHandle {
             let previous_target = state.target.replace(target.clone());
             state.emit_change();
 
-            if previous_target.map(|x| x.id) != Some(target.id) {
-                AuditEvent::TargetSessionStarted {
-                    session_id: self.id,
-                    target_id: target.id,
-                    target_name: target.name.clone(),
-                    user_id: user_info.id,
-                    username: user_info.username,
-                }
-                .emit();
+            (user_info, previous_target.map(|x| x.id) != Some(target.id))
+        };
+
+        if target_changed {
+            // Pre-Session/Grant — a failure here (and `continue_on_error = false`)
+            // aborts the session before the protocol starts relaying anything.
+            warpgate_actions::run_pre_session_actions(
+                &self.db,
+                self.id,
+                user_info.id,
+                target.id,
+                &user_info.username,
+            )
+            .await?;
+
+            AuditEvent::TargetSessionStarted {
+                session_id: self.id,
+                target_id: target.id,
+                target_name: target.name.clone(),
+                user_id: user_info.id,
+                username: user_info.username,
             }
+            .emit();
         }
 
         self.update_rate_limiters().await

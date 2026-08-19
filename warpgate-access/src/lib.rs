@@ -79,6 +79,29 @@ async fn target_matches_policy(
     Ok(false)
 }
 
+/// The `access_policies` that actually authorize `user_id` for `target_id` — not just
+/// ones matching the user's groups, but ones whose target selector also matches.
+///
+/// Exposed so `warpgate-actions` can look up which Grant actions a policy that just
+/// authorized a session should trigger, without re-deriving this matching logic.
+pub async fn authorizing_policies(
+    db: &DatabaseConnection,
+    user_id: Uuid,
+    target_id: Uuid,
+) -> Result<Vec<AccessPolicy::Model>, WarpgateError> {
+    let Some(target) = Target::Entity::find_by_id(target_id).one(db).await? else {
+        return Ok(vec![]);
+    };
+
+    let mut result = vec![];
+    for policy in applicable_policies(db, user_id).await? {
+        if target_matches_policy(db, &policy, target_id, target.group_id).await? {
+            result.push(policy);
+        }
+    }
+    Ok(result)
+}
+
 /// Is `user_id` authorized for `target_id`, per the `access_policies` model?
 ///
 /// This is meant to be OR-ed with the legacy `Role`-based check during the
@@ -88,16 +111,7 @@ pub async fn is_authorized(
     user_id: Uuid,
     target_id: Uuid,
 ) -> Result<bool, WarpgateError> {
-    let Some(target) = Target::Entity::find_by_id(target_id).one(db).await? else {
-        return Ok(false);
-    };
-
-    for policy in applicable_policies(db, user_id).await? {
-        if target_matches_policy(db, &policy, target_id, target.group_id).await? {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok(!authorizing_policies(db, user_id, target_id).await?.is_empty())
 }
 
 /// All target IDs `user_id` can reach via the `access_policies` model.
