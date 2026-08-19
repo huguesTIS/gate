@@ -138,6 +138,20 @@ pub enum AuditEvent {
         name: String,
         actor_user_id: Uuid,
     },
+    ManagedAccountCreated {
+        managed_account_id: Uuid,
+        target_id: Uuid,
+        user_group_id: Uuid,
+        principal_name: String,
+        actor_user_id: Uuid,
+    },
+    ManagedAccountDeleted {
+        managed_account_id: Uuid,
+        target_id: Uuid,
+        user_group_id: Uuid,
+        principal_name: String,
+        actor_user_id: Uuid,
+    },
 }
 
 impl AuditEvent {
@@ -471,6 +485,42 @@ impl AuditEvent {
                     name = %name,
                     related_users = ?format_related_ids(&[*actor_user_id]),
                     "Deleted action definition"
+                );
+            }
+            Self::ManagedAccountCreated {
+                managed_account_id,
+                target_id,
+                user_group_id,
+                principal_name,
+                actor_user_id,
+            } => {
+                info!(
+                    target: "audit",
+                    _type = "ManagedAccountCreated1",
+                    managed_account_id = %managed_account_id,
+                    target_id = %target_id,
+                    user_group_id = %user_group_id,
+                    principal_name = %principal_name,
+                    related_users = ?format_related_ids(&[*actor_user_id]),
+                    "Created managed account"
+                );
+            }
+            Self::ManagedAccountDeleted {
+                managed_account_id,
+                target_id,
+                user_group_id,
+                principal_name,
+                actor_user_id,
+            } => {
+                info!(
+                    target: "audit",
+                    _type = "ManagedAccountDeleted1",
+                    managed_account_id = %managed_account_id,
+                    target_id = %target_id,
+                    user_group_id = %user_group_id,
+                    principal_name = %principal_name,
+                    related_users = ?format_related_ids(&[*actor_user_id]),
+                    "Deleted managed account"
                 );
             }
         }

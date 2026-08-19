@@ -24,7 +24,7 @@ async fn applicable_policies(
     db: &DatabaseConnection,
     user_id: Uuid,
 ) -> Result<Vec<AccessPolicy::Model>, WarpgateError> {
-    let user_group_ids: Vec<Uuid> = UserGroupMember::Entity::find()
+    let user_group_ids: Vec<Uuid> = UserGroupMember::Entity::find_active()
         .filter(UserGroupMember::Column::UserId.eq(user_id))
         .all(db)
         .await?

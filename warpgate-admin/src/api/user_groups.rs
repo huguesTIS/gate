@@ -2,6 +2,7 @@ use poem_openapi::param::Path;
 use poem_openapi::payload::Json;
 use poem_openapi::{ApiResponse, Object, OpenApi};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, ModelTrait, QueryFilter, QueryOrder, Set};
+use time::OffsetDateTime;
 use uuid::Uuid;
 use warpgate_common::{AdminPermission, WarpgateError};
 use warpgate_core::logging::AuditEvent;
@@ -212,6 +213,13 @@ enum GetUserGroupMembersResponse {
     NotFound,
 }
 
+#[derive(Object)]
+struct AddUserGroupMemberRequest {
+    /// When this membership expires (null = never) — the lever for third-party
+    /// account lifecycle: set this when onboarding a tiers for a fixed term.
+    expires_at: Option<OffsetDateTime>,
+}
+
 #[derive(ApiResponse)]
 enum AddUserGroupMemberResponse {
     #[oai(status = 201)]
@@ -247,7 +255,7 @@ impl MembersApi {
             return Ok(GetUserGroupMembersResponse::NotFound);
         }
 
-        let member_ids: Vec<Uuid> = UserGroupMember::Entity::find()
+        let member_ids: Vec<Uuid> = UserGroupMember::Entity::find_active()
             .filter(UserGroupMember::Column::UserGroupId.eq(id.0))
             .all(db)
             .await?
@@ -274,6 +282,7 @@ impl MembersApi {
         admin: AdminContext,
         id: Path<Uuid>,
         user_id: Path<Uuid>,
+        body: Json<Option<AddUserGroupMemberRequest>>,
     ) -> Result<AddUserGroupMemberResponse, WarpgateError> {
         admin.require(AdminPermission::GovernanceManage)?;
 
@@ -285,20 +294,8 @@ impl MembersApi {
             return Ok(AddUserGroupMemberResponse::NotFound);
         }
 
-        let existing = UserGroupMember::Entity::find()
-            .filter(UserGroupMember::Column::UserGroupId.eq(id.0))
-            .filter(UserGroupMember::Column::UserId.eq(user_id.0))
-            .one(db)
-            .await?;
-        if existing.is_none() {
-            UserGroupMember::ActiveModel {
-                user_group_id: Set(id.0),
-                user_id: Set(user_id.0),
-                ..Default::default()
-            }
-            .insert(db)
-            .await?;
-        }
+        let expires_at = body.0.and_then(|b| b.expires_at);
+        UserGroupMember::Entity::idempotent_grant(db, id.0, user_id.0, expires_at).await?;
 
         Ok(AddUserGroupMemberResponse::Created)
     }
@@ -326,7 +323,12 @@ impl MembersApi {
             return Ok(RemoveUserGroupMemberResponse::NotFound);
         };
 
-        membership.delete(db).await?;
+        // Soft delete — sets revoked_at, mirrors user_roles' AccessRoleRevoked
+        // handling (see users.rs) rather than deleting the row outright.
+        let mut membership: UserGroupMember::ActiveModel = membership.into();
+        membership.revoked_at = Set(Some(OffsetDateTime::now_utc()));
+        membership.update(db).await?;
+
         Ok(RemoveUserGroupMemberResponse::Removed)
     }
 }

@@ -18,6 +18,7 @@ mod known_hosts_list;
 mod ldap_servers;
 mod login_protection;
 mod logs;
+mod managed_accounts;
 mod network_status;
 mod otp_credentials;
 mod pagination;
@@ -94,6 +95,7 @@ pub fn get() -> impl OpenApi {
             (user_groups::ListApi, user_groups::DetailApi, user_groups::MembersApi),
             (access_policies::ListApi, access_policies::DetailApi),
             (action_definitions::ListApi, action_definitions::DetailApi),
+            (managed_accounts::ListApi, managed_accounts::DetailApi),
             target_labels::LabelsApi,
         ),
     )
