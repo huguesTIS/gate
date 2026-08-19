@@ -17,7 +17,7 @@ use sea_orm::{
 };
 use serde_json::json;
 use time::OffsetDateTime;
-use tracing::{error, warn};
+use tracing::{Instrument, error, info_span, warn};
 use uuid::Uuid;
 use warpgate_common::WarpgateError;
 use warpgate_db_entities::{
@@ -289,13 +289,21 @@ pub async fn run_post_session_actions_now(db: &DatabaseConnection, session_id: U
 
 /// Processes every `Pending` action execution regardless of session — the
 /// durability backstop, meant to be polled periodically by a background loop.
+///
+/// Unlike `run_pre_session_actions`/`run_post_session_actions_now` (called from
+/// inside a protocol session's own tracing span), this runs standalone — so each
+/// execution gets its own `session=...` span here, otherwise `ValuesLogLayer`
+/// (see `warpgate-core/src/logging/layer.rs`) has nothing to key a `log` row on
+/// and silently drops it, same as any other session-less event.
 pub async fn process_pending_actions(db: &DatabaseConnection) -> Result<(), WarpgateError> {
     let pending = ActionExecution::Entity::find()
         .filter(ActionExecution::Column::Status.eq(ExecutionStatus::Pending))
         .all(db)
         .await?;
     for execution in pending {
-        run_one_removal(db, execution).await?;
+        let session_id = execution.session_id;
+        let span = info_span!("action-retry", session = %session_id);
+        run_one_removal(db, execution).instrument(span).await?;
     }
     Ok(())
 }

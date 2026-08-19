@@ -27,3 +27,7 @@ warpgate-db-entities = { path = "../warpgate-db-entities" }
 postgres = ["sea-orm/sqlx-postgres"]
 mysql = ["sea-orm/sqlx-mysql"]
 sqlite = ["sea-orm/sqlx-sqlite"]
+
+[dev-dependencies]
+sea-orm = { workspace = true, features = ["sqlx-sqlite"] }
+tokio = { workspace = true, features = ["macros", "rt"] }

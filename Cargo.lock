@@ -9003,6 +9003,7 @@ dependencies = [
  "tokio-tungstenite 0.30.0",
  "tracing",
  "uuid",
+ "warpgate-actions",
  "warpgate-aws",
  "warpgate-ca",
  "warpgate-common",

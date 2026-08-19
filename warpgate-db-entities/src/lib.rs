@@ -6,6 +6,7 @@ pub mod ActionDefinition;
 pub mod ActionExecution;
 pub mod AdminRole;
 pub mod ApiToken;
+pub mod AuditMaintenanceMode;
 pub mod CertificateCredential;
 pub mod CertificateRevocation;
 pub mod FailedLoginAttempt;

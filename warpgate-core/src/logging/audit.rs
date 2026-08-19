@@ -108,6 +108,36 @@ pub enum AuditEvent {
         target: String,
         actor_user_id: Uuid,
     },
+    UserGroupCreated {
+        user_group_id: Uuid,
+        name: String,
+        actor_user_id: Uuid,
+    },
+    UserGroupDeleted {
+        user_group_id: Uuid,
+        name: String,
+        actor_user_id: Uuid,
+    },
+    AccessPolicyCreated {
+        access_policy_id: Uuid,
+        name: String,
+        actor_user_id: Uuid,
+    },
+    AccessPolicyDeleted {
+        access_policy_id: Uuid,
+        name: String,
+        actor_user_id: Uuid,
+    },
+    ActionDefinitionCreated {
+        action_definition_id: Uuid,
+        name: String,
+        actor_user_id: Uuid,
+    },
+    ActionDefinitionDeleted {
+        action_definition_id: Uuid,
+        name: String,
+        actor_user_id: Uuid,
+    },
 }
 
 impl AuditEvent {
@@ -357,6 +387,90 @@ impl AuditEvent {
                     target = %target,
                     related_users = ?format_related_ids(&[*user_id, *actor_user_id]),
                     "Deleted ticket"
+                );
+            }
+            Self::UserGroupCreated {
+                user_group_id,
+                name,
+                actor_user_id,
+            } => {
+                info!(
+                    target: "audit",
+                    _type = "UserGroupCreated1",
+                    user_group_id = %user_group_id,
+                    name = %name,
+                    related_users = ?format_related_ids(&[*actor_user_id]),
+                    "Created user group"
+                );
+            }
+            Self::UserGroupDeleted {
+                user_group_id,
+                name,
+                actor_user_id,
+            } => {
+                info!(
+                    target: "audit",
+                    _type = "UserGroupDeleted1",
+                    user_group_id = %user_group_id,
+                    name = %name,
+                    related_users = ?format_related_ids(&[*actor_user_id]),
+                    "Deleted user group"
+                );
+            }
+            Self::AccessPolicyCreated {
+                access_policy_id,
+                name,
+                actor_user_id,
+            } => {
+                info!(
+                    target: "audit",
+                    _type = "AccessPolicyCreated1",
+                    access_policy_id = %access_policy_id,
+                    name = %name,
+                    related_users = ?format_related_ids(&[*actor_user_id]),
+                    "Created access policy"
+                );
+            }
+            Self::AccessPolicyDeleted {
+                access_policy_id,
+                name,
+                actor_user_id,
+            } => {
+                info!(
+                    target: "audit",
+                    _type = "AccessPolicyDeleted1",
+                    access_policy_id = %access_policy_id,
+                    name = %name,
+                    related_users = ?format_related_ids(&[*actor_user_id]),
+                    "Deleted access policy"
+                );
+            }
+            Self::ActionDefinitionCreated {
+                action_definition_id,
+                name,
+                actor_user_id,
+            } => {
+                info!(
+                    target: "audit",
+                    _type = "ActionDefinitionCreated1",
+                    action_definition_id = %action_definition_id,
+                    name = %name,
+                    related_users = ?format_related_ids(&[*actor_user_id]),
+                    "Created action definition"
+                );
+            }
+            Self::ActionDefinitionDeleted {
+                action_definition_id,
+                name,
+                actor_user_id,
+            } => {
+                info!(
+                    target: "audit",
+                    _type = "ActionDefinitionDeleted1",
+                    action_definition_id = %action_definition_id,
+                    name = %name,
+                    related_users = ?format_related_ids(&[*actor_user_id]),
+                    "Deleted action definition"
                 );
             }
         }

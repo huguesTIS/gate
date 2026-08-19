@@ -3,8 +3,8 @@ use std::time::Duration;
 use anyhow::Result;
 use sea_orm::sea_query::Expr;
 use sea_orm::{
-    ConnectOptions, Database, DatabaseConnection, EntityOrSelect, EntityTrait, QueryFilter,
-    QuerySelect,
+    ColumnTrait, ConnectOptions, Database, DatabaseConnection, EntityOrSelect, EntityTrait,
+    QueryFilter, QuerySelect, TransactionTrait,
 };
 use time::OffsetDateTime;
 use tracing::error;
@@ -149,15 +149,34 @@ pub async fn cleanup_db(
     retention: &Duration,
     audit_retention: &Duration,
 ) -> Result<()> {
-    use warpgate_db_entities::{LogEntry, Recording, Session, Ticket, TicketRequest};
+    use warpgate_db_entities::{AuditMaintenanceMode, LogEntry, Recording, Session, Ticket, TicketRequest};
     let audit_cutoff = OffsetDateTime::now_utc() - time::Duration::try_from(*audit_retention)?;
     let recording_cutoff = OffsetDateTime::now_utc() - time::Duration::try_from(*retention)?;
 
-    LogEntry::Entity::delete_many()
-        .filter(Expr::col(LogEntry::Column::Target).eq("audit"))
-        .filter(Expr::col(LogEntry::Column::Timestamp).lt(audit_cutoff))
-        .exec(db)
-        .await?;
+    // `log` rows with target='audit' are append-only (see the m00080 migration) —
+    // this is the one legitimate caller allowed to touch them, via a transaction
+    // so a crash mid-purge can't leave the maintenance flag stuck enabled.
+    {
+        let txn = db.begin().await?;
+        AuditMaintenanceMode::Entity::update_many()
+            .col_expr(AuditMaintenanceMode::Column::Enabled, Expr::value(true))
+            .filter(AuditMaintenanceMode::Column::Id.eq(1))
+            .exec(&txn)
+            .await?;
+
+        LogEntry::Entity::delete_many()
+            .filter(Expr::col(LogEntry::Column::Target).eq("audit"))
+            .filter(Expr::col(LogEntry::Column::Timestamp).lt(audit_cutoff))
+            .exec(&txn)
+            .await?;
+
+        AuditMaintenanceMode::Entity::update_many()
+            .col_expr(AuditMaintenanceMode::Column::Enabled, Expr::value(false))
+            .filter(AuditMaintenanceMode::Column::Id.eq(1))
+            .exec(&txn)
+            .await?;
+        txn.commit().await?;
+    }
 
     LogEntry::Entity::delete_many()
         .filter(Expr::col(LogEntry::Column::Target).ne("audit"))

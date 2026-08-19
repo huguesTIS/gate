@@ -83,6 +83,8 @@ mod m00076_open_targets_in_new_tab;
 mod m00077_session_user_target_id;
 mod m00078_access_governance;
 mod m00079_action_governance;
+mod m00080_audit_log_immutability;
+mod m00081_governance_admin_permission;
 
 pub(crate) mod helpers;
 
@@ -171,6 +173,8 @@ impl MigratorTrait for Migrator {
             Box::new(m00077_session_user_target_id::Migration),
             Box::new(m00078_access_governance::Migration),
             Box::new(m00079_action_governance::Migration),
+            Box::new(m00080_audit_log_immutability::Migration),
+            Box::new(m00081_governance_admin_permission::Migration),
         ]
     }
 }

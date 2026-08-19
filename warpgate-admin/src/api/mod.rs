@@ -1,5 +1,7 @@
 use poem_openapi::OpenApi;
 
+mod access_policies;
+mod action_definitions;
 mod admin_roles;
 mod certificate_credentials;
 pub mod cluster_proxy;
@@ -30,12 +32,14 @@ mod ssh_connection_test;
 mod ssh_keys;
 mod sso_credentials;
 mod target_groups;
+mod target_labels;
 mod targets;
 mod ticket_requests_detail;
 mod ticket_requests_list;
 mod tickets_detail;
 mod tickets_list;
 pub mod users;
+mod user_groups;
 
 pub use warpgate_common::api::AnySecurityScheme;
 
@@ -85,6 +89,12 @@ pub fn get() -> impl OpenApi {
         (
             certificate_credentials::ListApi,
             certificate_credentials::DetailApi,
+        ),
+        (
+            (user_groups::ListApi, user_groups::DetailApi, user_groups::MembersApi),
+            (access_policies::ListApi, access_policies::DetailApi),
+            (action_definitions::ListApi, action_definitions::DetailApi),
+            target_labels::LabelsApi,
         ),
     )
 }

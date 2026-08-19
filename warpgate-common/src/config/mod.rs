@@ -208,6 +208,8 @@ pub struct AdminRole {
     pub admin_roles_manage: bool,
 
     pub ticket_requests_manage: bool,
+
+    pub governance_manage: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsonSchema, strum::EnumIter)]
@@ -231,6 +233,7 @@ pub enum AdminPermission {
     ConfigEdit,
     AdminRolesManage,
     TicketRequestsManage,
+    GovernanceManage,
 }
 
 impl AdminRole {
@@ -254,6 +257,7 @@ impl AdminRole {
             AdminPermission::ConfigEdit => self.config_edit,
             AdminPermission::AdminRolesManage => self.admin_roles_manage,
             AdminPermission::TicketRequestsManage => self.ticket_requests_manage,
+            AdminPermission::GovernanceManage => self.governance_manage,
         }
     }
 }
@@ -345,6 +349,7 @@ mod admin_permission_set_tests {
             config_edit: false,
             admin_roles_manage: false,
             ticket_requests_manage: false,
+            governance_manage: false,
         }
     }
 
