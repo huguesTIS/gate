@@ -6,6 +6,16 @@ run *ARGS='run':
 run-release *ARGS='run':
     RUST_BACKTRACE=1 cargo run --all-features --release -- --config config.yaml {{ARGS}}
 
+# Merge an upstream warp-tech/warpgate release into this fork and verify the
+# build still passes. TAG is a real upstream tag, e.g. `just sync-upstream v0.28.1`
+# — deliberately explicit rather than auto-picking "latest", since the tag list
+# also carries unrelated things like `chart-v*`. See CLAUDE.md's "Tracking
+# upstream" section before resolving a conflict this produces.
+sync-upstream TAG:
+    git fetch upstream --tags
+    git merge {{TAG}} --no-edit
+    cargo build --all-features
+
 fmt:
     for p in {{projects}}; do cargo fmt -p $p -v; done
 
