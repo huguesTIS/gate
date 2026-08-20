@@ -541,6 +541,7 @@ impl ServerSession {
             &self.services,
             authorization.target().id,
             Some(&authorization.user_info().username),
+            Some(authorization.user_info().id),
         )
         .await?;
 

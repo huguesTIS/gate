@@ -11,6 +11,7 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 use serde::Deserialize;
 use uuid::Uuid;
 use warpgate_common::WarpgateError;
+use warpgate_common::helpers::login_template::LoginNameTemplate;
 use warpgate_db_entities::{AccessPolicy, Target, TargetLabel, UserGroupMember};
 
 #[derive(Debug, Clone, Deserialize)]
@@ -100,6 +101,30 @@ pub async fn authorizing_policies(
         }
     }
     Ok(result)
+}
+
+/// The `login_template` of the highest-priority authorizing policy that sets one
+/// — for computing the effective target login name in Requester/Managed mode.
+/// `None` means no authorizing policy sets a template (use the portal username
+/// as-is), not "not authorized at all" — call `is_authorized` for that.
+pub async fn effective_login_template(
+    db: &DatabaseConnection,
+    user_id: Uuid,
+    target_id: Uuid,
+) -> Result<Option<LoginNameTemplate>, WarpgateError> {
+    let mut candidates: Vec<AccessPolicy::Model> = authorizing_policies(db, user_id, target_id)
+        .await?
+        .into_iter()
+        .filter(|p| p.login_template.is_some())
+        .collect();
+    candidates.sort_by(|a, b| b.priority.cmp(&a.priority));
+
+    let Some(policy) = candidates.into_iter().next() else {
+        return Ok(None);
+    };
+    #[allow(clippy::unwrap_used)] // filtered to Some above
+    let template = serde_json::from_value(policy.login_template.unwrap())?;
+    Ok(Some(template))
 }
 
 /// Is `user_id` authorized for `target_id`, per the `access_policies` model?

@@ -118,7 +118,7 @@ impl WebSshClientManager {
 
         self.insert(session.clone()).await;
 
-        let ssh_chain = resolve_ssh_chain(services, target.id, Some(&username))
+        let ssh_chain = resolve_ssh_chain(services, target.id, Some(&username), Some(user_id))
             .await?
             .into_iter()
             .map(|x| x.ssh_options)

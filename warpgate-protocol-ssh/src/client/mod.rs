@@ -120,13 +120,17 @@ fn resolve_chain_ids(
     Ok(ids)
 }
 
-/// Resolve the full ordered SSH jump chain for a target
-/// `logged_in_username` is used to substitute empty dynamic usernames
-/// in targets' configs
+/// Resolve the full ordered SSH jump chain for a target.
+/// `logged_in_username` is used to substitute empty dynamic usernames in
+/// targets' configs, and — for a `Requester`-mode host — as the input to that
+/// host's effective `login_template` (see `warpgate_access::effective_login_template`,
+/// `ARCHITECTURE_TECHNIQUE.md` §10 "Mode Requester"); `user_id` is required to look
+/// that template up and is otherwise unused.
 pub async fn resolve_ssh_chain(
     services: &Services,
     target_id: Uuid,
     logged_in_username: Option<&String>,
+    user_id: Option<Uuid>,
 ) -> Result<Vec<ResolvedSshChainHost>, WarpgateError> {
     let targets = services.config_provider.list_targets().await?;
 
@@ -150,10 +154,27 @@ pub async fn resolve_ssh_chain(
         };
         let mut opts = opts.clone();
 
-        // Forward username from the authenticated user to the target, if target has no username
-        if let Some(logged_in_username) = logged_in_username
+        if matches!(opts.auth, SSHTargetAuth::Requester(_)) {
+            // Requester mode always computes the login name dynamically — never
+            // the target's static `username` field.
+            if let (Some(logged_in_username), Some(user_id)) = (logged_in_username, user_id) {
+                opts.username = match warpgate_access::effective_login_template(
+                    &services.db,
+                    user_id,
+                    id,
+                )
+                .await?
+                {
+                    Some(template) => template.render(logged_in_username),
+                    None => logged_in_username.clone(),
+                };
+            } else if let Some(logged_in_username) = logged_in_username {
+                opts.username = logged_in_username.clone();
+            }
+        } else if let Some(logged_in_username) = logged_in_username
             && opts.username.is_empty()
         {
+            // Forward username from the authenticated user to the target, if target has no username
             opts.username = logged_in_username.clone();
         }
 

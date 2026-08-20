@@ -42,8 +42,13 @@ impl Api {
     ) -> Result<CheckSshHostKeyResponse, WarpgateError> {
         admin.require(AdminPermission::TargetsEdit)?;
 
-        let ssh_chain =
-            resolve_ssh_chain(admin.services(), body.target_id, admin.auth.username()).await?;
+        let ssh_chain = resolve_ssh_chain(
+            admin.services(),
+            body.target_id,
+            admin.auth.username(),
+            Some(admin.auth.user_id()),
+        )
+        .await?;
 
         let Some(target) = ssh_chain.last() else {
             return Err(WarpgateError::InconsistentState(

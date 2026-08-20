@@ -270,12 +270,30 @@ impl<S: AsyncRead + AsyncWrite + Send + Unpin> MySqlSession<S> {
             return Ok(());
         };
 
-        let mysql_options = mysql_options.clone();
+        let mut mysql_options = mysql_options.clone();
+        let user_id = user_info.id;
+        let portal_username = user_info.username.clone();
 
         {
             let handle = self.server_handle.lock().await;
             handle.set_user_info(user_info).await?;
             handle.set_target(&target).await?;
+        }
+
+        if matches!(
+            mysql_options.effective_auth(),
+            warpgate_common::DatabaseTargetAuth::Requester(_)
+        ) {
+            mysql_options.username = match warpgate_access::effective_login_template(
+                &self.services.db,
+                user_id,
+                target.id,
+            )
+            .await?
+            {
+                Some(template) => template.render(&portal_username),
+                None => portal_username,
+            };
         }
 
         self.run_authorized_inner(handshake, mysql_options).await

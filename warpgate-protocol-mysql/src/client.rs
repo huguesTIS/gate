@@ -105,6 +105,15 @@ impl MySqlClient {
                     .await
                     .map_err(WarpgateError::Aws)?
             }
+            warpgate_common::DatabaseTargetAuth::Requester(_) => {
+                // Relaying the connecting user's own credential isn't implemented
+                // yet — see `ARCHITECTURE_TECHNIQUE.md` §10 ("Mode Requester").
+                return Err(WarpgateError::InconsistentState(
+                    "Requester-mode database targets are not yet supported by this deployment"
+                        .into(),
+                )
+                .into());
+            }
         };
 
         // Servers without PLUGIN_AUTH are pre-plugin and expect mysql_native_password

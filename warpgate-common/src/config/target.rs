@@ -134,6 +134,11 @@ pub enum DatabaseTargetAuth {
     Password(DatabaseTargetPasswordAuth),
     #[serde(rename = "iam_role")]
     IamRole(DatabaseTargetIamRoleAuth),
+    /// See `SSHTargetAuth::Requester` — same model (nothing stored, effective
+    /// login name from `access_policies.login_template`), same caveat (the
+    /// credential-relay mechanism this depends on isn't built yet).
+    #[serde(rename = "requester")]
+    Requester(DatabaseTargetRequesterAuth),
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Object, Default)]
@@ -144,6 +149,9 @@ pub struct DatabaseTargetPasswordAuth {
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Object, Default)]
 pub struct DatabaseTargetIamRoleAuth {}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Object, Default)]
+pub struct DatabaseTargetRequesterAuth {}
 
 impl Default for DatabaseTargetAuth {
     fn default() -> Self {
