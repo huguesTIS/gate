@@ -98,6 +98,8 @@ Please use GitHub's [vulnerability reporting system](https://github.com/warp-tec
 
 Warpgate is being actively used in enterprise settings.
 
+What's planned and being worked on next is tracked on the public [roadmap](https://github.com/orgs/warp-tech/projects/1/views/2).
+
 ## How it works
 
 Warpgate is a service that you deploy on the bastion/DMZ host, which will accept SSH, HTTPS, Kubernetes, MySQL, PostgreSQL, RDP and VNC connections and provide an (optional) web admin UI.
@@ -202,6 +204,7 @@ Thanks goes to these wonderful people ([emoji key](https://allcontributors.org/d
     <tr>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/sravan-blitz"><img src="https://avatars.githubusercontent.com/u/279685696?v=4?s=100" width="100px;" alt="sravan-blitz"/><br /><sub><b>sravan-blitz</b></sub></a><br /><a href="https://github.com/warp-tech/warpgate/commits?author=sravan-blitz" title="Code">💻</a></td>
       <td align="center" valign="top" width="14.28%"><a href="https://github.com/EdMcBane"><img src="https://avatars.githubusercontent.com/u/8511142?v=4?s=100" width="100px;" alt="Francesco Degrassi"/><br /><sub><b>Francesco Degrassi</b></sub></a><br /><a href="https://github.com/warp-tech/warpgate/commits?author=EdMcBane" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="http://betterspace.top"><img src="https://avatars.githubusercontent.com/u/141388234?v=4?s=100" width="100px;" alt="Yuzhong Zhang"/><br /><sub><b>Yuzhong Zhang</b></sub></a><br /><a href="https://github.com/warp-tech/warpgate/commits?author=BetterAndBetterII" title="Code">💻</a></td>
     </tr>
   </tbody>
 </table>
