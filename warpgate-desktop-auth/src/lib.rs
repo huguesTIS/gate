@@ -7,7 +7,9 @@
 //! audit label, and target-options extractor via [`DesktopProtocol`].
 
 mod hold_screen;
+mod keyboard_xkb;
 mod otp;
+mod text_entry;
 
 use std::collections::HashSet;
 use std::net::{IpAddr, SocketAddr};
@@ -17,7 +19,12 @@ use anyhow::{Result, bail};
 pub use hold_screen::{
     Deadline, HoldEvent, HoldFrame, HoldInputSource, HoldPainter, run_hold_screen,
 };
+pub use keyboard_xkb::TextKeyboard;
 pub use otp::{MAX_OTP_ATTEMPTS, OtpAction, OtpActionApplyOutcome, OtpEntry};
+pub use text_entry::{
+    CredentialField, CredentialFields, KeyboardLayout, TextFieldAction, is_shift_scancode,
+    key_text_action, scancode_text_action,
+};
 use tokio::sync::Mutex;
 use tracing::warn;
 use uuid::Uuid;

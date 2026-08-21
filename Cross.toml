@@ -1,5 +1,11 @@
 [target.x86_64-unknown-linux-gnu]
-pre-build = ["apt-get update && apt-get install --assume-yes libz-dev"]
+# libxkbcommon-dev: headers + pkg-config for linking the `xkbcommon` crate at build time.
+# xkb-data: the actual keyboard-layout database (rules/symbols/*) `xkb_keymap_new_from_names`
+# reads at runtime — needed because the same image doubles as our deployment container (see
+# CLAUDE.md "Build environment"). See ARCHITECTURE_TECHNIQUE.md §10 for why: this is what lets
+# the RDP Requester credential screen type the right character for *any* client keyboard layout
+# (KLID -> xkb RMLVO), not just the hand-rolled QWERTY/AZERTY-FR tables it started with.
+pre-build = ["apt-get update && apt-get install --assume-yes libz-dev libxkbcommon-dev xkb-data pkg-config"]
 
 [build.env]
 # Lets `OPENBAO_ADDR`/`OPENBAO_TOKEN`/`OPENBAO_MOUNT` reach `cargo test -- --ignored`

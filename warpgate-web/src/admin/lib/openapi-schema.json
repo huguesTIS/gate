@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "Warpgate Web Admin",
-    "version": "v0.28.0-beta.3-modified"
+    "version": "unknown"
   },
   "servers": [
     {
@@ -4399,10 +4399,1384 @@
         ],
         "operationId": "revoke_certificate_credential"
       }
+    },
+    "/user-groups": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UserGroup"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "list_user_groups"
+      },
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json; charset=utf-8": {
+              "schema": {
+                "$ref": "#/components/schemas/UserGroupDataRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserGroup"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "create_user_group"
+      }
+    },
+    "/user-groups/{id}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserGroup"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "get_user_group"
+      },
+      "put": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json; charset=utf-8": {
+              "schema": {
+                "$ref": "#/components/schemas/UserGroupDataRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserGroup"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "update_user_group"
+      },
+      "delete": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "delete_user_group"
+      }
+    },
+    "/user-groups/{id}/members": {
+      "get": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/User"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "list_user_group_members"
+      }
+    },
+    "/user-groups/{id}/members/{user_id}": {
+      "put": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          },
+          {
+            "name": "user_id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json; charset=utf-8": {
+              "schema": {
+                "$ref": "#/components/schemas/AddUserGroupMemberRequest"
+              }
+            }
+          },
+          "required": false
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "add_user_group_member"
+      },
+      "delete": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          },
+          {
+            "name": "user_id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "remove_user_group_member"
+      }
+    },
+    "/access-policies": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AccessPolicyResponse"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "list_access_policies"
+      },
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json; charset=utf-8": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessPolicyDataRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessPolicyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "create_access_policy"
+      }
+    },
+    "/access-policies/{id}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessPolicyResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "get_access_policy"
+      },
+      "put": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json; charset=utf-8": {
+              "schema": {
+                "$ref": "#/components/schemas/AccessPolicyDataRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessPolicyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "update_access_policy"
+      },
+      "delete": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "delete_access_policy"
+      }
+    },
+    "/action-definitions": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ActionDefinition"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "list_action_definitions"
+      },
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json; charset=utf-8": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionDefinitionDataRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionDefinition"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "create_action_definition"
+      }
+    },
+    "/action-definitions/{id}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionDefinition"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "get_action_definition"
+      },
+      "put": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json; charset=utf-8": {
+              "schema": {
+                "$ref": "#/components/schemas/ActionDefinitionDataRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActionDefinition"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "update_action_definition"
+      },
+      "delete": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": "A `Grant` still referencing this as its `Remove` counterpart blocks deletion\n— deleting it would leave a Grant that can never pass pairing validation again.",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "delete_action_definition"
+      }
+    },
+    "/managed-accounts": {
+      "get": {
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ManagedAccount"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "list_managed_accounts"
+      },
+      "post": {
+        "requestBody": {
+          "content": {
+            "application/json; charset=utf-8": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedAccountDataRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedAccount"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "create_managed_account"
+      }
+    },
+    "/managed-accounts/{id}": {
+      "get": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedAccount"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "get_managed_account"
+      },
+      "put": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json; charset=utf-8": {
+              "schema": {
+                "$ref": "#/components/schemas/ManagedAccountDataRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedAccount"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "update_managed_account"
+      },
+      "delete": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "delete_managed_account"
+      }
+    },
+    "/managed-accounts/{id}/secret": {
+      "put": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json; charset=utf-8": {
+              "schema": {
+                "$ref": "#/components/schemas/SetManagedAccountSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "set_managed_account_secret"
+      },
+      "delete": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": ""
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "delete_managed_account_secret"
+      }
+    },
+    "/targets/{id}/labels": {
+      "get": {
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LabelEntry"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "get_target_labels"
+      },
+      "put": {
+        "summary": "Replace-all: the given set of labels becomes the target's complete label\nset — send the full list, not a delta.",
+        "parameters": [
+          {
+            "name": "id",
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "in": "path",
+            "required": true,
+            "deprecated": false,
+            "explode": true
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json; charset=utf-8": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/LabelEntry"
+                }
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json; charset=utf-8": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/LabelEntry"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "TokenSecurityScheme": []
+          },
+          {
+            "CookieSecurityScheme": []
+          }
+        ],
+        "operationId": "set_target_labels"
+      }
     }
   },
   "components": {
     "schemas": {
+      "AccessPolicyDataRequest": {
+        "type": "object",
+        "title": "AccessPolicyDataRequest",
+        "required": [
+          "name",
+          "user_group_id",
+          "priority",
+          "active",
+          "action_definition_ids"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "user_group_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "target_group_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "target_label_selector": {},
+          "valid_from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "valid_until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "login_template": {
+            "description": "Effective target login name for Requester/Managed connections; `None` =\nportal username as-is. See `ARCHITECTURE_TECHNIQUE.md` §10 (\"Mode Requester\").",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/LoginNameTemplate"
+              },
+              {
+                "description": "Effective target login name for Requester/Managed connections; `None` =\nportal username as-is. See `ARCHITECTURE_TECHNIQUE.md` §10 (\"Mode Requester\")."
+              }
+            ]
+          },
+          "action_definition_ids": {
+            "type": "array",
+            "description": "`Grant` actions this policy triggers when it authorizes a session. Their\npaired `Remove` is scheduled automatically — not listed here separately.",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "AccessPolicyResponse": {
+        "type": "object",
+        "title": "AccessPolicyResponse",
+        "required": [
+          "id",
+          "name",
+          "user_group_id",
+          "priority",
+          "active",
+          "action_definition_ids"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "user_group_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "target_group_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "target_label_selector": {},
+          "valid_from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "valid_until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "priority": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "login_template": {
+            "$ref": "#/components/schemas/LoginNameTemplate"
+          },
+          "action_definition_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        }
+      },
+      "ActionDefinition": {
+        "type": "object",
+        "title": "ActionDefinition",
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "connector_type",
+          "config",
+          "continue_on_error"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ActionKind"
+          },
+          "paired_action_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Set on `Grant` rows only — the `Remove` action that undoes it. A `Grant`\ncan't be attached to a policy without this being set (see `warpgate-actions`)."
+          },
+          "connector_type": {
+            "$ref": "#/components/schemas/ConnectorType"
+          },
+          "config": {
+            "description": "Connector-specific parameters — e.g. for `LdapGroup`: `ldap_server_id`,\n`group_dn`, `member_dn_template` (with a `{username}` placeholder)."
+          },
+          "continue_on_error": {
+            "type": "boolean",
+            "description": "If true, a failure of this action doesn't block the session (Grant) or\nisn't retried forever (Remove) — it's just logged."
+          }
+        }
+      },
+      "ActionDefinitionDataRequest": {
+        "type": "object",
+        "title": "ActionDefinitionDataRequest",
+        "required": [
+          "name",
+          "kind",
+          "connector_type",
+          "config",
+          "continue_on_error"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ActionKind"
+          },
+          "paired_action_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Required (and validated) when `kind` is `Grant` — the `Remove` action that\nundoes it. See `warpgate-actions::validate_grant_pairing`."
+          },
+          "connector_type": {
+            "$ref": "#/components/schemas/ConnectorType"
+          },
+          "config": {},
+          "continue_on_error": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ActionKind": {
+        "type": "string",
+        "enum": [
+          "Grant",
+          "Remove"
+        ]
+      },
       "AddSshKnownHostRequest": {
         "type": "object",
         "title": "AddSshKnownHostRequest",
@@ -4425,6 +5799,17 @@
           },
           "key_base64": {
             "type": "string"
+          }
+        }
+      },
+      "AddUserGroupMemberRequest": {
+        "type": "object",
+        "title": "AddUserGroupMemberRequest",
+        "properties": {
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When this membership expires (null = never) — the lever for third-party\naccount lifecycle: set this when onboarding a tiers for a fixed term."
           }
         }
       },
@@ -4464,7 +5849,8 @@
           "tickets_delete",
           "config_edit",
           "admin_roles_manage",
-          "ticket_requests_manage"
+          "ticket_requests_manage",
+          "governance_manage"
         ],
         "properties": {
           "id": {
@@ -4529,6 +5915,9 @@
             "type": "boolean"
           },
           "ticket_requests_manage": {
+            "type": "boolean"
+          },
+          "governance_manage": {
             "type": "boolean"
           }
         }
@@ -4615,6 +6004,9 @@
             "type": "boolean"
           },
           "ticket_requests_manage": {
+            "type": "boolean"
+          },
+          "governance_manage": {
             "type": "boolean"
           }
         }
@@ -4722,6 +6114,12 @@
             "type": "string"
           }
         }
+      },
+      "ConnectorType": {
+        "type": "string",
+        "enum": [
+          "LdapGroup"
+        ]
       },
       "CreateLdapServerRequest": {
         "type": "object",
@@ -4858,6 +6256,18 @@
           "WebUserApproval"
         ]
       },
+      "CustomTemplate": {
+        "type": "object",
+        "title": "CustomTemplate",
+        "required": [
+          "format"
+        ],
+        "properties": {
+          "format": {
+            "type": "string"
+          }
+        }
+      },
       "DatabaseTargetAuth": {
         "type": "object",
         "oneOf": [
@@ -4866,13 +6276,17 @@
           },
           {
             "$ref": "#/components/schemas/DatabaseTargetAuth_DatabaseTargetIamRoleAuth"
+          },
+          {
+            "$ref": "#/components/schemas/DatabaseTargetAuth_DatabaseTargetRequesterAuth"
           }
         ],
         "discriminator": {
           "propertyName": "kind",
           "mapping": {
             "Password": "#/components/schemas/DatabaseTargetAuth_DatabaseTargetPasswordAuth",
-            "IamRole": "#/components/schemas/DatabaseTargetAuth_DatabaseTargetIamRoleAuth"
+            "IamRole": "#/components/schemas/DatabaseTargetAuth_DatabaseTargetIamRoleAuth",
+            "Requester": "#/components/schemas/DatabaseTargetAuth_DatabaseTargetRequesterAuth"
           }
         }
       },
@@ -4920,6 +6334,28 @@
           }
         ]
       },
+      "DatabaseTargetAuth_DatabaseTargetRequesterAuth": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "Requester"
+                ],
+                "example": "Requester"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/DatabaseTargetRequesterAuth"
+          }
+        ]
+      },
       "DatabaseTargetIamRoleAuth": {
         "type": "object",
         "title": "DatabaseTargetIamRoleAuth"
@@ -4936,11 +6372,40 @@
           }
         }
       },
+      "DatabaseTargetRequesterAuth": {
+        "type": "object",
+        "title": "DatabaseTargetRequesterAuth"
+      },
       "DenyTicketRequestBody": {
         "type": "object",
         "title": "DenyTicketRequestBody",
         "properties": {
           "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "DomainSamAccountNameTemplate": {
+        "type": "object",
+        "title": "DomainSamAccountNameTemplate",
+        "description": "Structurally identical to [`DomainTemplate`], kept as a separate type rather than reused\nfor both `DomainSamAccountName` and `Upn`: `#[oai(one_of)]` needs one distinct schema per\ndiscriminated variant, and sharing a single schema between two `kind` values confused the\ngenerated OpenAPI discriminator mapping (the generated TypeScript client's `kind` field for\nthe shared schema only carried one of the two literal values, so the discriminated union\nlost its other member and `tsc` failed on the `switch (value['kind'])` in the generated\n`LoginNameTemplateToJSONTyped` — reproduced 2026-08-20 regenerating the admin API client).",
+        "required": [
+          "domain"
+        ],
+        "properties": {
+          "domain": {
+            "type": "string"
+          }
+        }
+      },
+      "DomainTemplate": {
+        "type": "object",
+        "title": "DomainTemplate",
+        "required": [
+          "domain"
+        ],
+        "properties": {
+          "domain": {
             "type": "string"
           }
         }
@@ -5319,6 +6784,22 @@
           }
         }
       },
+      "LabelEntry": {
+        "type": "object",
+        "title": "LabelEntry",
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
       "LdapServerResponse": {
         "type": "object",
         "title": "LdapServerResponse",
@@ -5530,6 +7011,212 @@
           },
           "related_admin_roles": {
             "type": "string"
+          }
+        }
+      },
+      "LoginNameTemplate": {
+        "type": "object",
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/LoginNameTemplate_SamAccountNameTemplate"
+          },
+          {
+            "$ref": "#/components/schemas/LoginNameTemplate_DomainSamAccountNameTemplate"
+          },
+          {
+            "$ref": "#/components/schemas/LoginNameTemplate_DomainTemplate"
+          },
+          {
+            "$ref": "#/components/schemas/LoginNameTemplate_CustomTemplate"
+          }
+        ],
+        "discriminator": {
+          "propertyName": "kind",
+          "mapping": {
+            "SamAccountName": "#/components/schemas/LoginNameTemplate_SamAccountNameTemplate",
+            "DomainSamAccountName": "#/components/schemas/LoginNameTemplate_DomainSamAccountNameTemplate",
+            "Upn": "#/components/schemas/LoginNameTemplate_DomainTemplate",
+            "Custom": "#/components/schemas/LoginNameTemplate_CustomTemplate"
+          }
+        }
+      },
+      "LoginNameTemplate_CustomTemplate": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "Custom"
+                ],
+                "example": "Custom"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/CustomTemplate"
+          }
+        ]
+      },
+      "LoginNameTemplate_DomainSamAccountNameTemplate": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "DomainSamAccountName"
+                ],
+                "example": "DomainSamAccountName"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/DomainSamAccountNameTemplate"
+          }
+        ]
+      },
+      "LoginNameTemplate_DomainTemplate": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "Upn"
+                ],
+                "example": "Upn"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/DomainTemplate"
+          }
+        ]
+      },
+      "LoginNameTemplate_SamAccountNameTemplate": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "SamAccountName"
+                ],
+                "example": "SamAccountName"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/SamAccountNameTemplate"
+          }
+        ]
+      },
+      "ManagedAccount": {
+        "type": "object",
+        "title": "ManagedAccount",
+        "description": "Identity mapping only — *not* a vault. One row = one tiers' account on one\ntarget. Lets several tiers each have their own distinct managed account on\na target that only has a single `Target.options.auth` field otherwise.",
+        "required": [
+          "id",
+          "target_id",
+          "user_group_id",
+          "principal_name",
+          "credential_mode",
+          "active",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "target_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_group_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "principal_name": {
+            "type": "string"
+          },
+          "credential_mode": {
+            "$ref": "#/components/schemas/ManagedAccountCredentialMode"
+          },
+          "secret_ref": {
+            "type": "string",
+            "description": "OpenBao reference — unusable until OpenBao itself is deployed (see backlog\nin `CLAUDE.md`). Never a secret value itself."
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ManagedAccountCredentialMode": {
+        "type": "string",
+        "description": "How `secret_ref` should be interpreted — see `ARCHITECTURE_TECHNIQUE.md` §10\n(\"`managed_accounts` — pas de secret local\"). Neither variant stores a secret\n(not even encrypted) on this row: the real material lives in OpenBao, this\ntable only maps *which* tiers has *which* account on *which* target.",
+        "enum": [
+          "VaultedSecret",
+          "EphemeralCertificate"
+        ]
+      },
+      "ManagedAccountDataRequest": {
+        "type": "object",
+        "title": "ManagedAccountDataRequest",
+        "required": [
+          "target_id",
+          "user_group_id",
+          "principal_name",
+          "credential_mode",
+          "active"
+        ],
+        "properties": {
+          "target_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "user_group_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "principal_name": {
+            "type": "string"
+          },
+          "credential_mode": {
+            "$ref": "#/components/schemas/ManagedAccountCredentialMode"
+          },
+          "secret_ref": {
+            "type": "string",
+            "description": "OpenBao reference — not a secret value. Unusable until OpenBao is deployed\n(see backlog in `CLAUDE.md`); accepted here so the mapping is ready ahead of that."
+          },
+          "active": {
+            "type": "boolean"
           }
         }
       },
@@ -6020,12 +7707,16 @@
         "oneOf": [
           {
             "$ref": "#/components/schemas/RdpTargetAuth_RdpTargetPasswordAuth"
+          },
+          {
+            "$ref": "#/components/schemas/RdpTargetAuth_RdpTargetRequesterAuth"
           }
         ],
         "discriminator": {
           "propertyName": "kind",
           "mapping": {
-            "Password": "#/components/schemas/RdpTargetAuth_RdpTargetPasswordAuth"
+            "Password": "#/components/schemas/RdpTargetAuth_RdpTargetPasswordAuth",
+            "Requester": "#/components/schemas/RdpTargetAuth_RdpTargetRequesterAuth"
           }
         }
       },
@@ -6051,6 +7742,28 @@
           }
         ]
       },
+      "RdpTargetAuth_RdpTargetRequesterAuth": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "Requester"
+                ],
+                "example": "Requester"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/RdpTargetRequesterAuth"
+          }
+        ]
+      },
       "RdpTargetPasswordAuth": {
         "type": "object",
         "title": "RdpTargetPasswordAuth",
@@ -6062,6 +7775,10 @@
             "type": "string"
           }
         }
+      },
+      "RdpTargetRequesterAuth": {
+        "type": "object",
+        "title": "RdpTargetRequesterAuth"
       },
       "RdpTlsSecurity": {
         "type": "string",
@@ -6424,6 +8141,9 @@
           },
           {
             "$ref": "#/components/schemas/SSHTargetAuth_SshTargetIamRoleAuth"
+          },
+          {
+            "$ref": "#/components/schemas/SSHTargetAuth_SshTargetRequesterAuth"
           }
         ],
         "discriminator": {
@@ -6431,7 +8151,8 @@
           "mapping": {
             "Password": "#/components/schemas/SSHTargetAuth_SshTargetPasswordAuth",
             "PublicKey": "#/components/schemas/SSHTargetAuth_SshTargetPublicKeyAuth",
-            "IamRole": "#/components/schemas/SSHTargetAuth_SshTargetIamRoleAuth"
+            "IamRole": "#/components/schemas/SSHTargetAuth_SshTargetIamRoleAuth",
+            "Requester": "#/components/schemas/SSHTargetAuth_SshTargetRequesterAuth"
           }
         }
       },
@@ -6500,6 +8221,32 @@
             "$ref": "#/components/schemas/SshTargetPublicKeyAuth"
           }
         ]
+      },
+      "SSHTargetAuth_SshTargetRequesterAuth": {
+        "allOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "Requester"
+                ],
+                "example": "Requester"
+              }
+            }
+          },
+          {
+            "$ref": "#/components/schemas/SshTargetRequesterAuth"
+          }
+        ]
+      },
+      "SamAccountNameTemplate": {
+        "type": "object",
+        "title": "SamAccountNameTemplate"
       },
       "SecurityStatus": {
         "type": "object",
@@ -6586,6 +8333,18 @@
           }
         }
       },
+      "SetManagedAccountSecretRequest": {
+        "type": "object",
+        "title": "SetManagedAccountSecretRequest",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        }
+      },
       "SshHostKeyVerificationMode": {
         "type": "string",
         "description": "What to do when a target's SSH host key isn't in the known hosts list.",
@@ -6622,6 +8381,10 @@
             "description": "Specific stored client key to authenticate with; `None` uses the keys\nmarked default."
           }
         }
+      },
+      "SshTargetRequesterAuth": {
+        "type": "object",
+        "title": "SshTargetRequesterAuth"
       },
       "StaticCredentials": {
         "type": "object",
@@ -7615,6 +9378,42 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "UserGroup": {
+        "type": "object",
+        "title": "UserGroup",
+        "required": [
+          "id",
+          "name",
+          "description"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      },
+      "UserGroupDataRequest": {
+        "type": "object",
+        "title": "UserGroupDataRequest",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
           }
         }
       },

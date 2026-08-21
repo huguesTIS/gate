@@ -9,6 +9,7 @@ publish = false
 anyhow.workspace = true
 tokio = { workspace = true, features = ["sync", "time", "macros"] }
 tracing.workspace = true
+xkbcommon = { version = "0.9", default-features = false }
 uuid.workspace = true
 warpgate-common = { path = "../warpgate-common", default-features = false }
 warpgate-common-http = { path = "../warpgate-common-http", default-features = false }

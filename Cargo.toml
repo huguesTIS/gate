@@ -47,6 +47,7 @@ resolver = "2"
 # forked to drop those pins so both stacks share one crypto generation. See PATCHES.md in
 # each vendored crate.
 [patch.crates-io]
+ironrdp-server = { path = "vendor/ironrdp-server" }
 ironrdp-session = { path = "vendor/ironrdp-session" }
 picky = { path = "vendor/picky" }
 sspi = { path = "vendor/sspi" }

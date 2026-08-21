@@ -42,6 +42,14 @@ pub enum Event {
     AuthRequest {
         username: String,
         password: String,
+        /// The client's negotiated keyboard layout (low word of a Windows locale
+        /// identifier, e.g. `0x0000_040C` for French AZERTY; `0` if unannounced) — from
+        /// `ironrdp-server`'s `warpgate.patch` (see `vendor/ironrdp-server/PATCHES.md`).
+        /// Constant for the life of the connection, so it's captured once here and
+        /// threaded through to wherever in-session text entry needs to map scancodes to
+        /// characters (the Requester credential screen — see `ARCHITECTURE_TECHNIQUE.md`
+        /// §10) rather than re-derived later.
+        keyboard_layout: u32,
         /// The credential validator awaits its verdict here. Carrying the reply channel in
         /// the request keeps request and response correlated by construction; dropping this
         /// sender — the control loop ending, or declining to answer a duplicate — resolves as

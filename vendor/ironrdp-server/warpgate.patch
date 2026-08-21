@@ -1,0 +1,53 @@
+--- ironrdp-server-0.13.0/src/server.rs
++++ base/src/server.rs
+@@ -165,6 +165,7 @@
+ ///     async fn validate(
+ ///         &self,
+ ///         creds: &Credentials,
++///         _keyboard_layout: u32,
+ ///     ) -> Result<CredentialDecision, CredentialValidationError> {
+ ///         if creds.username == self.expected_user && creds.password == self.expected_password {
+ ///             Ok(CredentialDecision::Accept)
+@@ -187,7 +188,19 @@
+     /// database driver) should offload the work, for example with
+     /// `tokio::task::spawn_blocking`, so the returned future does not stall the
+     /// caller's executor. Native-async backends can simply `.await`.
+-    async fn validate(&self, credentials: &Credentials) -> Result<CredentialDecision, CredentialValidationError>;
++    ///
++    /// Warpgate fork: `keyboard_layout` is the client's negotiated keyboard layout — the
++    /// low word of a Windows locale identifier (e.g. `0x0000_0409` for US English,
++    /// `0x0000_040C` for French), `0` if the client did not announce one. Sourced from
++    /// `AcceptorResult::keyboard_layout`, unrelated to
++    /// credential validation itself but threaded through here since this is the one hook
++    /// already called once per connection with I/O access, letting the embedder pick a
++    /// server-side input-decoding layout matching the client without a second callback.
++    async fn validate(
++        &self,
++        credentials: &Credentials,
++        keyboard_layout: u32,
++    ) -> Result<CredentialDecision, CredentialValidationError>;
+ }
+ 
+ /// A built-in [`CredentialValidator`] that accepts exactly one fixed set of credentials.
+@@ -208,7 +221,11 @@
+ 
+ #[async_trait::async_trait]
+ impl CredentialValidator for ExactMatchCredentialValidator {
+-    async fn validate(&self, credentials: &Credentials) -> Result<CredentialDecision, CredentialValidationError> {
++    async fn validate(
++        &self,
++        credentials: &Credentials,
++        _keyboard_layout: u32,
++    ) -> Result<CredentialDecision, CredentialValidationError> {
+         if credentials == &self.expected {
+             Ok(CredentialDecision::Accept)
+         } else {
+@@ -1349,7 +1366,7 @@
+         // closing, matching the acceptor's exact-match denial path.
+         if let Some(validator) = self.credential_validator.clone() {
+             if let Some(creds) = &result.credentials {
+-                match validator.validate(creds).await {
++                match validator.validate(creds, result.keyboard_layout).await {
+                     Ok(CredentialDecision::Accept) => {
+                         debug!("Credential validation accepted");
+                     }

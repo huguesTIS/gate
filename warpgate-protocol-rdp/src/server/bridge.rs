@@ -2,8 +2,8 @@
 //! viewer-facing RDP server, and record the session.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use anyhow::Result;
 use tokio::sync::Mutex;
 use tokio::sync::mpsc::Sender;
 use tracing::{info, warn};
@@ -15,6 +15,34 @@ use warpgate_core::{
 
 use super::BackendBridge;
 use super::protocol::Input as ServerInput;
+
+/// How long [`connect_backend`] waits to see the target either connect or fail before giving
+/// up and treating it as rejected — mirrors `client::HANDSHAKE_TIMEOUT`, since this is the
+/// same handshake, just observed from the event stream instead of driving it directly.
+const DIAL_OUTCOME_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Why [`connect_backend`] failed to bring the target up.
+pub(super) enum DialError {
+    /// The target itself rejected the connection (bad credentials, refused, etc.) — a
+    /// Requester-mode caller can show this to the viewer and let them retry with a
+    /// different password rather than ending the session outright.
+    Rejected(String),
+    /// Anything else (recording setup, DB, session bookkeeping) — not meaningfully
+    /// retryable by reprompting for a password, so callers should end the session.
+    Fatal(anyhow::Error),
+}
+
+impl From<anyhow::Error> for DialError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Fatal(error)
+    }
+}
+
+impl From<warpgate_common::WarpgateError> for DialError {
+    fn from(error: warpgate_common::WarpgateError) -> Self {
+        Self::Fatal(error.into())
+    }
+}
 
 /// Bridge target-side desktop events to the viewer-facing RDP server. Every framebuffer
 /// update is a delta rectangle, so none may be dropped — a lost tile leaves that region
@@ -83,6 +111,13 @@ async fn frame_bridge(
 }
 
 /// Connect to the target and start bridging its framebuffer, once auth is complete.
+///
+/// Waits to see the target actually come up (`DesktopState::Connected`) before committing to
+/// the bridge — a target-side rejection (bad Requester credential, refused connection, ...)
+/// arrives as an early `DesktopEvent::Error`/`Disconnected` on the same stream, which is
+/// reported as [`DialError::Rejected`] instead of silently starting a bridge to a dead
+/// connection. Events before that point are otherwise discarded: IronRDP only starts sending
+/// framebuffer data after `Connected`, so nothing display-relevant is lost.
 pub(super) async fn connect_backend(
     services: &Services,
     server_handle: &Arc<Mutex<WarpgateServerHandle>>,
@@ -90,7 +125,7 @@ pub(super) async fn connect_backend(
     authorization: TargetAuthorization,
     options: TargetRdpOptions,
     screen: warpgate_desktop_ui::Screen,
-) -> Result<BackendBridge> {
+) -> Result<BackendBridge, DialError> {
     let (user_info, target) = authorization.into_parts();
     {
         let handle = server_handle.lock().await;
@@ -105,10 +140,40 @@ pub(super) async fn connect_backend(
         .map(Arc::new);
 
     let crate::RdpClientHandles {
-        event_rx,
+        mut event_rx,
         input_tx,
         abort_tx,
     } = crate::connect(options, (screen.width, screen.height));
+
+    let outcome = tokio::time::timeout(DIAL_OUTCOME_TIMEOUT, async {
+        loop {
+            match event_rx.recv().await {
+                Some(DesktopEvent::State(DesktopState::Connected)) => return Ok(()),
+                Some(DesktopEvent::Error(message)) => return Err(message),
+                Some(DesktopEvent::State(DesktopState::Disconnected)) => {
+                    return Err("The target closed the connection".to_owned());
+                }
+                Some(_) => continue,
+                None => return Err("The target connection ended unexpectedly".to_owned()),
+            }
+        }
+    })
+    .await;
+
+    match outcome {
+        Ok(Ok(())) => {}
+        Ok(Err(message)) => {
+            abort_tx.send(()).ok();
+            return Err(DialError::Rejected(message));
+        }
+        Err(_) => {
+            abort_tx.send(()).ok();
+            return Err(DialError::Rejected(
+                "Timed out waiting for the target to respond".to_owned(),
+            ));
+        }
+    }
+
     let frame_bridge = tokio::spawn(frame_bridge(
         event_rx,
         server_in_tx.clone(),

@@ -324,6 +324,7 @@ impl CredentialValidator for Validator {
     async fn validate(
         &self,
         credentials: &Credentials,
+        keyboard_layout: u32,
     ) -> Result<CredentialDecision, CredentialValidationError> {
         let (reply, verdict) = oneshot::channel();
         if self
@@ -331,6 +332,7 @@ impl CredentialValidator for Validator {
             .send(Event::AuthRequest {
                 username: credentials.username.clone(),
                 password: credentials.password.clone(),
+                keyboard_layout,
                 reply,
             })
             .is_err()

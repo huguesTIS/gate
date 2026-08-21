@@ -9,7 +9,7 @@ mod tls;
 
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use bytes::Bytes;
 use ironrdp::cliprdr::CliprdrClient;
 use ironrdp::cliprdr::backend::ClipboardMessage;
@@ -83,7 +83,16 @@ pub async fn run(
         .await
         .ok();
 
-    let RdpTargetAuth::Password(auth) = &options.auth;
+    let auth = match &options.auth {
+        RdpTargetAuth::Password(auth) => auth,
+        RdpTargetAuth::Requester(_) => {
+            // Relaying the connecting user's own credential to the target isn't
+            // implemented yet — see `ARCHITECTURE_TECHNIQUE.md` §10 ("RDP +
+            // Requester par écran de saisie in-session"). Fail clearly rather
+            // than silently falling back to some other auth method.
+            bail!("Requester-mode RDP targets are not yet supported by this deployment");
+        }
+    };
     // The viewer-supplied size may be odd or out of range; keep the initial desktop within
     // the same bounds the Display Control resize path enforces.
     let (width, height) =

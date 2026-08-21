@@ -29,7 +29,10 @@ use tokio::time::{Instant, timeout_at};
 use tokio_stream::StreamExt;
 use tracing::{Instrument, debug, error, info, info_span, warn};
 use warpgate_common::helpers::net::accept_client;
-use warpgate_common::{ListenEndpoint, Protocol, Target, TargetOptions, TargetRdpOptions};
+use warpgate_common::{
+    ListenEndpoint, Protocol, RdpTargetAuth, RdpTargetPasswordAuth, StoredSecret, Target,
+    TargetOptions, TargetRdpOptions,
+};
 use warpgate_core::recordings::DesktopRecorder;
 use warpgate_core::{
     DesktopInput, Services, SessionStateInit, State, TargetAuthorization, WarpgateServerHandle,
@@ -46,8 +49,8 @@ mod hold_screen;
 mod protocol;
 mod rdp;
 
-use bridge::connect_backend;
-use hold_screen::{run_banner_screen, run_hold_screen};
+use bridge::{DialError, connect_backend};
+use hold_screen::{run_banner_screen, run_credential_screen, run_hold_screen};
 use protocol::{AuthVerdict, Event as ServerEvent, Input as ServerInput};
 use warpgate_desktop_auth::{
     DesktopAuthOutcome, DesktopProtocol, authenticate, finalize_user_auth,
@@ -224,6 +227,10 @@ async fn control_loop(
         width: DEFAULT_SCREEN_W,
         height: DEFAULT_SCREEN_H,
     };
+    // The client's negotiated keyboard layout, captured once from `AuthRequest` — constant
+    // for the connection's life, needed much later (if at all) by the Requester credential
+    // screen, potentially after 2FA/banner have already consumed several events.
+    let mut keyboard_layout: u32 = 0;
 
     let handshake_deadline = Instant::now() + HANDSHAKE_TIMEOUT;
 
@@ -244,6 +251,7 @@ async fn control_loop(
             ServerEvent::AuthRequest {
                 username,
                 password,
+                keyboard_layout: negotiated_keyboard_layout,
                 reply,
             } => {
                 if backend.is_some() || pending_dial.is_some() {
@@ -251,6 +259,7 @@ async fn control_loop(
                     // duplicate request by dropping its reply rather than answering twice.
                     continue;
                 }
+                keyboard_layout = negotiated_keyboard_layout;
                 match authenticate::<RdpProto>(
                     &services,
                     &server_handle,
@@ -283,8 +292,10 @@ async fn control_loop(
                                     &mut pending_dial,
                                     &services,
                                     &server_handle,
+                                    &mut events,
                                     &server_in_tx,
-                                    screen,
+                                    &mut screen,
+                                    keyboard_layout,
                                 )
                                 .await?;
                             }
@@ -336,8 +347,10 @@ async fn control_loop(
                                             &mut pending_dial,
                                             &services,
                                             &server_handle,
+                                            &mut events,
                                             &server_in_tx,
-                                            screen,
+                                            &mut screen,
+                                            keyboard_layout,
                                         )
                                         .await?;
                                     }
@@ -378,8 +391,10 @@ async fn control_loop(
                     &mut pending_dial,
                     &services,
                     &server_handle,
+                    &mut events,
                     &server_in_tx,
-                    screen,
+                    &mut screen,
+                    keyboard_layout,
                 )
                 .await?;
                 continue;
@@ -396,8 +411,10 @@ async fn control_loop(
             &mut pending_dial,
             &services,
             &server_handle,
+            &mut events,
             &server_in_tx,
-            screen,
+            &mut screen,
+            keyboard_layout,
         )
         .await?;
 
@@ -455,31 +472,158 @@ async fn acknowledge_banner(
     )
 }
 
+/// How many rejected target passwords a Requester-mode viewer gets before the session just
+/// ends — the same shape as `MAX_OTP_ATTEMPTS`, sized generously since the *target* (the real
+/// AD account's own lockout policy) is the actual brute-force backstop here, not Warpgate.
+const MAX_REQUESTER_DIAL_ATTEMPTS: usize = 5;
+
 /// Dial the pending target, if there is one and it hasn't been dialed yet, at `screen`.
+///
+/// For a Requester-mode target this is also where the in-session credential prompt runs
+/// (via [`resolve_requester_auth`]) — right before the dial actually happens, so the three
+/// call sites that can trigger a dial (banner acknowledged, viewer `Size`, first viewer
+/// input) all get it for free without disturbing the existing size-negotiation ordering for
+/// the common (stored-password) target, which never enters that branch. A target-side
+/// rejection (bad password) reprompts on the same screen with the error shown, instead of
+/// ending the session on the first wrong guess.
 async fn dial_if_pending(
     backend: &mut Option<BackendBridge>,
     pending: &mut Option<PendingDial>,
     services: &Services,
     server_handle: &Arc<tokio::sync::Mutex<WarpgateServerHandle>>,
+    events: &mut UnboundedReceiver<ServerEvent>,
     server_in_tx: &Sender<ServerInput>,
-    screen: warpgate_desktop_ui::Screen,
+    screen: &mut warpgate_desktop_ui::Screen,
+    keyboard_layout: u32,
 ) -> Result<()> {
-    if backend.is_none()
-        && let Some((authorization, options)) = pending.take()
+    let Some((authorization, mut options)) = (if backend.is_none() {
+        pending.take()
+    } else {
+        None
+    }) else {
+        return Ok(());
+    };
+
+    let is_requester = matches!(options.auth, RdpTargetAuth::Requester(_));
+    if !resolve_requester_auth(
+        services,
+        events,
+        server_in_tx,
+        screen,
+        &authorization,
+        &mut options,
+        keyboard_layout,
+        None,
+    )
+    .await?
     {
-        *backend = Some(
-            connect_backend(
-                services,
-                server_handle,
-                server_in_tx,
-                authorization,
-                options,
-                screen,
-            )
-            .await?,
-        );
+        // Viewer disconnected while typing the target credential.
+        let _ = server_in_tx.send(ServerInput::Shutdown).await;
+        return Ok(());
     }
-    Ok(())
+
+    let mut attempt = 1;
+    loop {
+        match connect_backend(
+            services,
+            server_handle,
+            server_in_tx,
+            authorization.clone(),
+            options.clone(),
+            *screen,
+        )
+        .await
+        {
+            Ok(bridge) => {
+                *backend = Some(bridge);
+                return Ok(());
+            }
+            Err(DialError::Rejected(message)) if is_requester && attempt < MAX_REQUESTER_DIAL_ATTEMPTS => {
+                let Some(password) = run_credential_screen(
+                    events,
+                    server_in_tx,
+                    screen,
+                    &options.username,
+                    keyboard_layout,
+                    Some(&message),
+                )
+                .await?
+                else {
+                    let _ = server_in_tx.send(ServerInput::Shutdown).await;
+                    return Ok(());
+                };
+                options.auth = RdpTargetAuth::Password(RdpTargetPasswordAuth {
+                    password: StoredSecret::from(password),
+                });
+                attempt += 1;
+            }
+            Err(DialError::Rejected(message)) => {
+                warn!(%message, "RDP target rejected the connection; giving up");
+                let _ = server_in_tx.send(ServerInput::Shutdown).await;
+                return Ok(());
+            }
+            Err(DialError::Fatal(error)) => return Err(error),
+        }
+    }
+}
+
+/// If `options.auth` is `Requester`, resolve the effective login name from the access
+/// policy's login template (same mechanism as `SSHTargetAuth::Requester`) and collect the
+/// target password over an in-session prompt, rewriting `options.auth` to a transient
+/// `Password` so the rest of the dial path (and `client::run`'s existing match on
+/// `RdpTargetAuth`) handles it unchanged — never written back to the target's stored
+/// config. A no-op returning `Ok(true)` immediately for any other auth kind. Returns
+/// `Ok(false)` if the viewer disconnected while typing.
+///
+/// See `ARCHITECTURE_TECHNIQUE.md` §10 ("RDP + Requester par écran de saisie in-session").
+async fn resolve_requester_auth(
+    services: &Services,
+    events: &mut UnboundedReceiver<ServerEvent>,
+    server_in_tx: &Sender<ServerInput>,
+    screen: &mut warpgate_desktop_ui::Screen,
+    authorization: &TargetAuthorization,
+    options: &mut TargetRdpOptions,
+    keyboard_layout: u32,
+    error: Option<&str>,
+) -> Result<bool> {
+    if !matches!(options.auth, RdpTargetAuth::Requester(_)) {
+        return Ok(true);
+    }
+
+    let user_info = authorization.user_info();
+    options.username = match warpgate_access::effective_login_template(
+        &services.db,
+        user_info.id,
+        authorization.target().id,
+    )
+    .await?
+    {
+        Some(template) => template.render(&user_info.username),
+        None => user_info.username.clone(),
+    };
+    // The template is the single source of truth for how the login name should look —
+    // `DomainSamAccountName`/`Upn` already embed the domain into `username` itself. A
+    // leftover `options.domain` (the target's static-auth NTLM domain field, which doesn't
+    // apply to Requester) would then make ironrdp see a domain-qualified username *and* a
+    // separate domain at once, which it rejects as an ambiguous "mixed username format".
+    options.domain = None;
+
+    let Some(password) = run_credential_screen(
+        events,
+        server_in_tx,
+        screen,
+        &options.username,
+        keyboard_layout,
+        error,
+    )
+    .await?
+    else {
+        return Ok(false);
+    };
+    options.auth = RdpTargetAuth::Password(RdpTargetPasswordAuth {
+        password: StoredSecret::from(password),
+    });
+    Ok(true)
 }
 
 /// RDP's binding to the shared desktop-auth flow.

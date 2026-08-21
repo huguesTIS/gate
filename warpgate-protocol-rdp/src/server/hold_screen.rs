@@ -13,7 +13,8 @@ use warpgate_common::auth::AuthStateUserInfo;
 use warpgate_core::{DesktopInput, Scancode, Services};
 use warpgate_desktop_auth::{
     Deadline, HoldEvent, HoldFrame, HoldInputSource, HoldPainter as HoldPainterExt,
-    InteractiveAuth, OtpAction, run_hold_screen as run_hold_screen_driver,
+    InteractiveAuth, OtpAction, TextFieldAction, TextKeyboard,
+    key_text_action, run_hold_screen as run_hold_screen_driver,
 };
 use warpgate_desktop_ui as ui;
 
@@ -164,6 +165,166 @@ pub(super) async fn run_banner_screen(
                     .await?;
             },
         }
+    }
+}
+
+/// Longest password this screen will accept from the viewer — bounds memory from a
+/// stuck/malicious viewer, well past any real target password.
+const MAX_CREDENTIAL_LEN: usize = 256;
+
+/// Show an in-session password prompt for a Requester-mode RDP target and collect what the
+/// viewer types. `username` (already resolved via the access policy's login template, mirrors
+/// `SSHTargetAuth::Requester`) is only displayed, never editable here — this screen collects
+/// the password alone. `error`, when set, is shown above the field: the reason a previous
+/// attempt with this same login name was rejected, so a retry isn't a guess. Returns `None` if
+/// the viewer disconnected before submitting. Like [`run_banner_screen`], tracks the viewer's
+/// negotiated size in `screen`.
+///
+/// See `ARCHITECTURE_TECHNIQUE.md` §10 ("RDP + Requester par écran de saisie in-session").
+pub(super) async fn run_credential_screen(
+    events: &mut UnboundedReceiver<ServerEvent>,
+    server_in_tx: &Sender<ServerInput>,
+    screen: &mut ui::Screen,
+    username: &str,
+    keyboard_layout: u32,
+    error: Option<&str>,
+) -> Result<Option<String>> {
+    let mut password = String::new();
+    let mut revealed = false;
+    let mut ctrl_down = false;
+    // Set only by an explicit Ctrl+V *inside this screen*, and consumed by the very next
+    // `Clipboard` event. The CLIPRDR channel auto-syncs the viewer's clipboard the instant it
+    // changes — `on_remote_copy` in `clipboard.rs` requests the data unconditionally, with no
+    // signal that anything actually wants to paste — so without this gate, whatever text
+    // happened to already be on the viewer's clipboard (e.g. their portal password, copied at
+    // any earlier point) silently fills the password field before they type anything.
+    let mut expecting_paste = false;
+    // Owns Shift/CapsLock state across key events the way a real keyboard driver would — RDP
+    // delivers press and release as separate scancode events, not a modifier bitmask. Prefers a
+    // real compiled `xkbcommon` keymap for `keyboard_layout` (see `TextKeyboard`'s docs), so
+    // typing isn't scrambled on any keyboard `xkeyboard-config` knows, not just the ones this
+    // screen was originally tested against.
+    let mut keyboard = TextKeyboard::new(keyboard_layout);
+    let mut painter = HoldPainter::new(*screen);
+    let mut ticker = tokio::time::interval(HOLD_RENDER_INTERVAL);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    loop {
+        tokio::select! {
+            event = events.recv() => {
+                let Some(event) = event else {
+                    return Ok(None);
+                };
+                match event {
+                    ServerEvent::Input(DesktopInput::Key {
+                        scancode: Some(scancode),
+                        down,
+                        ..
+                    }) => {
+                        // F1 (0x3b) toggles the plaintext reveal — intercepted before the
+                        // keyboard translator so it never types into the password itself.
+                        if scancode.code == 0x3b && !scancode.extended {
+                            if down {
+                                revealed = !revealed;
+                            }
+                            continue;
+                        }
+                        // Left (0x1d) or right (extended 0x1d) Ctrl — tracked so a Ctrl+<key>
+                        // shortcut (Ctrl+V above all) doesn't also type that key's plain
+                        // character into the password.
+                        if scancode.code == 0x1d {
+                            ctrl_down = down;
+                        } else if scancode.code == 0x2f
+                            && !scancode.extended
+                            && down
+                            && ctrl_down
+                        {
+                            expecting_paste = true;
+                        }
+
+                        let action = keyboard.key_action(scancode, down);
+                        tracing::debug!(
+                            ?scancode,
+                            down,
+                            ?action,
+                            "Requester credential screen key event"
+                        );
+                        if !ctrl_down
+                            && let Some(action) = action
+                            && apply_credential_action(&mut password, action)
+                        {
+                            return Ok(Some(password));
+                        }
+                    }
+                    ServerEvent::Input(DesktopInput::Key {
+                        keysym: Some(keysym),
+                        down: true,
+                        ..
+                    }) => {
+                        if let Some(action) = key_text_action(keysym)
+                            && apply_credential_action(&mut password, action)
+                        {
+                            return Ok(Some(password));
+                        }
+                    }
+                    // The viewer pasted (Ctrl+V) — arrives over CLIPRDR, not as key events, so
+                    // it needs its own arm. Only applied if `expecting_paste` was just armed by
+                    // an explicit Ctrl+V above — see its docs for why that gate exists. Same
+                    // length bound as typed characters.
+                    ServerEvent::Input(DesktopInput::Clipboard(text)) => {
+                        if expecting_paste {
+                            expecting_paste = false;
+                            for c in text.chars() {
+                                if password.len() >= MAX_CREDENTIAL_LEN {
+                                    break;
+                                }
+                                password.push(c);
+                            }
+                        }
+                    }
+                    ServerEvent::Size { width, height } => {
+                        *screen = ui::Screen { width, height };
+                        painter.set_screen(*screen);
+                    }
+                    _ => (),
+                }
+            },
+            _ = ticker.tick() => {
+                painter
+                    .paint(server_in_tx, |screen, tick| {
+                        ui::render_authentication(
+                            screen,
+                            tick,
+                            &ui::AuthPrompt::Credential {
+                                username: username.to_owned(),
+                                password: password.clone(),
+                                revealed,
+                                error: error.map(ToOwned::to_owned),
+                            },
+                        )
+                    })
+                    .await?;
+            },
+        }
+    }
+}
+
+/// Apply one text-field action to the password buffer. Returns `true` once the viewer
+/// submits a non-empty password. `NextField` is a no-op — this screen has only one field.
+fn apply_credential_action(password: &mut String, action: TextFieldAction) -> bool {
+    match action {
+        TextFieldAction::Char(c) => {
+            if password.len() < MAX_CREDENTIAL_LEN {
+                password.push(c);
+            }
+            false
+        }
+        TextFieldAction::Backspace => {
+            password.pop();
+            false
+        }
+        TextFieldAction::NextField => false,
+        TextFieldAction::Submit => !password.is_empty(),
     }
 }
 
@@ -334,5 +495,185 @@ mod otp_input_tests {
         assert!(matches!(key_otp_action(0x0a), Some(OtpAction::Submit)));
         assert!(key_otp_action(u32::from('A')).is_none());
         assert!(key_otp_action(u32::from(' ')).is_none());
+    }
+}
+
+/// Drives [`run_credential_screen`] through fake `ServerEvent`/`ServerInput` channels, the
+/// way the real control loop feeds it — no `Services`/DB involved, since this screen never
+/// touches auth state. Exercises what the pure `text_entry` mapping-function tests can't: the
+/// shift-state bookkeeping and the `tokio::select!` loop itself.
+#[cfg(test)]
+mod credential_screen_tests {
+    use tokio::sync::mpsc::{channel, unbounded_channel};
+    use tokio::time::{Duration, timeout};
+
+    use super::*;
+
+    fn key(code: u8, down: bool) -> ServerEvent {
+        ServerEvent::Input(DesktopInput::Key {
+            keysym: None,
+            scancode: Some(Scancode {
+                code,
+                extended: false,
+            }),
+            down,
+        })
+    }
+
+    const LEFT_SHIFT: u8 = 0x2a;
+    const ENTER: u8 = 0x1c;
+    const BACKSPACE: u8 = 0x0e;
+
+    /// Spawns `run_credential_screen` against a fresh pair of channels and a generously
+    /// buffered `server_in` (frames are painted every 100ms; the test channel just needs to
+    /// outlast the test, not be drained).
+    fn spawn_screen() -> (
+        tokio::sync::mpsc::UnboundedSender<ServerEvent>,
+        tokio::task::JoinHandle<anyhow::Result<Option<String>>>,
+    ) {
+        let (events_tx, mut events_rx) = unbounded_channel::<ServerEvent>();
+        let (server_in_tx, mut server_in_rx) = channel::<ServerInput>(256);
+        // Keeps the receiver alive for the screen's whole run — dropping it would make
+        // `HoldPainter::paint`'s send fail on the first render tick and end the screen with
+        // an error instead of letting it keep reading input. Exits on its own once the
+        // screen task ends and drops `server_in_tx`.
+        tokio::spawn(async move { while server_in_rx.recv().await.is_some() {} });
+        let handle = tokio::spawn(async move {
+            let mut screen = ui::Screen {
+                width: 800,
+                height: 600,
+            };
+            run_credential_screen(&mut events_rx, &server_in_tx, &mut screen, "someuser", 0, None)
+                .await
+        });
+        (events_tx, handle)
+    }
+
+    #[tokio::test]
+    async fn types_with_shift_and_submits() {
+        let (events_tx, handle) = spawn_screen();
+
+        // Shift+h, i, Shift+1, Enter -> "Hi!" — exercises shift tracked across separate
+        // press/release events, not just a single `scancode_text_action` call.
+        for event in [
+            key(LEFT_SHIFT, true),
+            key(0x23, true), // h -> 'H' while shifted
+            key(0x23, false),
+            key(LEFT_SHIFT, false),
+            key(0x17, true), // i -> 'i' unshifted
+            key(0x17, false),
+            key(LEFT_SHIFT, true),
+            key(0x02, true), // 1 -> '!' while shifted
+            key(0x02, false),
+            key(LEFT_SHIFT, false),
+            key(ENTER, true),
+        ] {
+            events_tx.send(event).expect("screen task still running");
+        }
+
+        let result = timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("screen task timed out")
+            .expect("screen task panicked");
+        assert_eq!(result.unwrap(), Some("Hi!".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn backspace_removes_the_last_character() {
+        let (events_tx, handle) = spawn_screen();
+        for event in [
+            key(0x1e, true), // a
+            key(0x1e, false),
+            key(BACKSPACE, true),
+            key(0x1f, true), // s
+            key(0x1f, false),
+            key(ENTER, true),
+        ] {
+            events_tx.send(event).expect("screen task still running");
+        }
+
+        let result = timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("screen task timed out")
+            .expect("screen task panicked");
+        assert_eq!(result.unwrap(), Some("s".to_owned()));
+    }
+
+    const LEFT_CTRL: u8 = 0x1d;
+    const V: u8 = 0x2f;
+
+    /// Reproduces a real bug: the CLIPRDR channel auto-syncs the viewer's clipboard the
+    /// instant it changes, independent of any explicit paste — so without gating on Ctrl+V,
+    /// whatever text was already on the clipboard (e.g. the viewer's portal password, copied
+    /// at any earlier point) silently filled this field before they typed anything.
+    #[tokio::test]
+    async fn clipboard_content_is_ignored_without_an_explicit_ctrl_v() {
+        let (events_tx, handle) = spawn_screen();
+        events_tx
+            .send(ServerEvent::Input(DesktopInput::Clipboard(
+                "totopass123".to_owned(),
+            )))
+            .unwrap();
+        events_tx.send(key(0x1e, true)).unwrap(); // a
+        events_tx.send(key(0x1e, false)).unwrap();
+        events_tx.send(key(ENTER, true)).unwrap();
+
+        let result = timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("screen task timed out")
+            .expect("screen task panicked");
+        assert_eq!(result.unwrap(), Some("a".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn ctrl_v_pastes_clipboard_content() {
+        let (events_tx, handle) = spawn_screen();
+        for event in [
+            key(LEFT_CTRL, true),
+            key(V, true),
+            key(V, false),
+            key(LEFT_CTRL, false),
+        ] {
+            events_tx.send(event).unwrap();
+        }
+        events_tx
+            .send(ServerEvent::Input(DesktopInput::Clipboard(
+                "hunter2".to_owned(),
+            )))
+            .unwrap();
+        events_tx.send(key(ENTER, true)).unwrap();
+
+        let result = timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("screen task timed out")
+            .expect("screen task panicked");
+        assert_eq!(result.unwrap(), Some("hunter2".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn submitting_an_empty_password_does_not_end_the_screen() {
+        let (events_tx, handle) = spawn_screen();
+        events_tx.send(key(ENTER, true)).unwrap();
+        events_tx.send(key(0x1e, true)).unwrap(); // a
+        events_tx.send(key(0x1e, false)).unwrap();
+        events_tx.send(key(ENTER, true)).unwrap();
+
+        let result = timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("screen task timed out")
+            .expect("screen task panicked");
+        assert_eq!(result.unwrap(), Some("a".to_owned()));
+    }
+
+    #[tokio::test]
+    async fn viewer_disconnect_ends_the_screen_with_none() {
+        let (events_tx, handle) = spawn_screen();
+        drop(events_tx);
+
+        let result = timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("screen task timed out")
+            .expect("screen task panicked");
+        assert_eq!(result.unwrap(), None);
     }
 }

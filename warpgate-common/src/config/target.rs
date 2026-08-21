@@ -372,12 +372,23 @@ impl TargetRdpOptions {
 pub enum RdpTargetAuth {
     #[serde(rename = "password")]
     Password(RdpTargetPasswordAuth),
+    /// See `SSHTargetAuth::Requester` — same model (nothing stored, effective
+    /// login name from `access_policies.login_template`). See
+    /// `ARCHITECTURE_TECHNIQUE.md` §10 ("RDP + Requester par écran de saisie
+    /// in-session") for the credential-relay mechanism this depends on — the
+    /// in-session capture screen isn't wired to the target dial yet, so this
+    /// variant exists but isn't reachable from a real connection yet.
+    #[serde(rename = "requester")]
+    Requester(RdpTargetRequesterAuth),
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Object)]
 pub struct RdpTargetPasswordAuth {
     pub password: StoredSecret,
 }
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Object, Default)]
+pub struct RdpTargetRequesterAuth {}
 
 impl Default for RdpTargetAuth {
     fn default() -> Self {
