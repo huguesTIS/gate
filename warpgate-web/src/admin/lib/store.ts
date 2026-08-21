@@ -118,6 +118,12 @@ export const ADMIN_PERMISSIONS = [
         category: 'Configuration',
         dangerous: true,
     } as const,
+    {
+        key: 'governanceManage' as const,
+        label: 'Manage governance (groups, policies, actions)',
+        category: 'Configuration',
+        dangerous: true,
+    } as const,
 ]
 
 export type AdminPermission = (typeof ADMIN_PERMISSIONS)[number]

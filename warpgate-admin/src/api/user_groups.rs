@@ -4,7 +4,7 @@ use poem_openapi::{ApiResponse, Object, OpenApi};
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, ModelTrait, QueryFilter, QueryOrder, Set};
 use time::OffsetDateTime;
 use uuid::Uuid;
-use warpgate_common::{AdminPermission, WarpgateError};
+use warpgate_common::{AdminPermission, User as UserConfig, WarpgateError};
 use warpgate_core::logging::AuditEvent;
 use warpgate_db_entities::{User, UserGroup, UserGroupMember};
 
@@ -208,7 +208,10 @@ impl DetailApi {
 #[derive(ApiResponse)]
 enum GetUserGroupMembersResponse {
     #[oai(status = 200)]
-    Ok(Json<Vec<User::Model>>),
+    // `UserConfig` (`warpgate_common::User`), not the raw `User::Model` entity: the two
+    // share the OpenAPI schema name "User" and the entity was never meant to be
+    // API-facing (see `users.rs`'s `GetUsersResponse` for the established pattern).
+    Ok(Json<Vec<UserConfig>>),
     #[oai(status = 404)]
     NotFound,
 }
@@ -266,7 +269,7 @@ impl MembersApi {
         let mut users = Vec::new();
         for user_id in member_ids {
             if let Some(user) = User::Entity::find_by_id(user_id).one(db).await? {
-                users.push(user);
+                users.push(UserConfig::try_from(user)?);
             }
         }
         Ok(GetUserGroupMembersResponse::Ok(Json(users)))

@@ -18,7 +18,7 @@ pub enum LoginNameTemplate {
     SamAccountName(SamAccountNameTemplate),
     /// `{domain}\{username}`.
     #[serde(rename = "domain_sam_account_name")]
-    DomainSamAccountName(DomainTemplate),
+    DomainSamAccountName(DomainSamAccountNameTemplate),
     /// `{username}@{domain}`.
     #[serde(rename = "upn")]
     Upn(DomainTemplate),
@@ -35,6 +35,18 @@ pub struct DomainTemplate {
     pub domain: String,
 }
 
+/// Structurally identical to [`DomainTemplate`], kept as a separate type rather than reused
+/// for both `DomainSamAccountName` and `Upn`: `#[oai(one_of)]` needs one distinct schema per
+/// discriminated variant, and sharing a single schema between two `kind` values confused the
+/// generated OpenAPI discriminator mapping (the generated TypeScript client's `kind` field for
+/// the shared schema only carried one of the two literal values, so the discriminated union
+/// lost its other member and `tsc` failed on the `switch (value['kind'])` in the generated
+/// `LoginNameTemplateToJSONTyped` — reproduced 2026-08-20 regenerating the admin API client).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
+pub struct DomainSamAccountNameTemplate {
+    pub domain: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Object)]
 pub struct CustomTemplate {
     pub format: String,
@@ -48,7 +60,7 @@ impl LoginNameTemplate {
     pub fn render(&self, username: &str) -> String {
         match self {
             Self::SamAccountName(_) => username.to_owned(),
-            Self::DomainSamAccountName(DomainTemplate { domain }) => {
+            Self::DomainSamAccountName(DomainSamAccountNameTemplate { domain }) => {
                 format!("{domain}\\{username}")
             }
             Self::Upn(DomainTemplate { domain }) => format!("{username}@{domain}"),
@@ -68,7 +80,7 @@ mod tests {
             "jdoe"
         );
         assert_eq!(
-            LoginNameTemplate::DomainSamAccountName(DomainTemplate {
+            LoginNameTemplate::DomainSamAccountName(DomainSamAccountNameTemplate {
                 domain: "CORP".into()
             })
             .render("jdoe"),
