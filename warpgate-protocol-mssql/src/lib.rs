@@ -29,10 +29,12 @@ use bytes::{Bytes, BytesMut};
 pub use login7_decode::decode_login7;
 use mssql_tls::{TlsConfig, TlsConnector, TlsPreloginWrapper};
 pub use server_tokens::{build_login_failure_response, build_login_success_response};
-use tds_protocol::{
-    ColMetaData, EncryptionLevel, Login7, PacketHeader, PacketStatus, PacketType, PreLogin,
-    SqlBatch, Token, TokenParser,
-};
+// Re-exported: these appear directly in this crate's own public function
+// signatures (EncryptionLevel/PreLogin as parameters and return types,
+// Login7 as server_read_login7's return type), so a caller needs to name
+// them without also taking a direct dependency on tds-protocol itself.
+pub use tds_protocol::{EncryptionLevel, Login7, PreLogin};
+use tds_protocol::{ColMetaData, PacketHeader, PacketStatus, PacketType, SqlBatch, Token, TokenParser};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 #[derive(Debug, thiserror::Error)]
@@ -380,7 +382,10 @@ pub async fn client_login7_sql_auth(
 /// Sends `sql` as a `SqlBatch` request and reads the response, counting rows
 /// and collecting column names. **Must** be called after a successful
 /// [`client_login7_sql_auth`] on the same connection.
-pub async fn client_sql_batch(stream: &mut (impl AsyncRead + AsyncWrite + Unpin), sql: &str) -> Result<QueryResult, MssqlError> {
+pub async fn client_sql_batch(
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    sql: &str,
+) -> Result<QueryResult, MssqlError> {
     let payload = SqlBatch::new(sql).encode();
     write_tds_message(stream, PacketType::SqlBatch, &payload).await?;
 
@@ -391,7 +396,42 @@ pub async fn client_sql_batch(stream: &mut (impl AsyncRead + AsyncWrite + Unpin)
             "expected a TabularResult SqlBatch response".to_string(),
         ));
     }
+    parse_query_result(body)
+}
 
+/// Sends `request` as an RPC packet — a stored procedure call, or (via
+/// [`tds_protocol::RpcRequest::execute_sql`]) `sp_executesql`, the way real
+/// drivers actually run parameterized queries (as opposed to a `SqlBatch`
+/// containing literal `EXEC ...` text, which also works but isn't what a
+/// real client sends). **Must** be called after a successful
+/// [`client_login7_sql_auth`] on the same connection.
+pub async fn client_rpc_call(
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    request: &tds_protocol::RpcRequest,
+) -> Result<QueryResult, MssqlError> {
+    let payload = request.encode();
+    write_tds_message(stream, PacketType::Rpc, &payload).await?;
+
+    let (packet_type, body) = read_tds_message(stream).await?;
+    if packet_type != PacketType::TabularResult {
+        return Err(MssqlError::UnexpectedPacketType(
+            packet_type,
+            "expected a TabularResult RPC response".to_string(),
+        ));
+    }
+    parse_query_result(body)
+}
+
+/// Shared token-parsing loop behind [`client_sql_batch`] and
+/// [`client_rpc_call`]. Both answer with the same `ColMetaData`/`Row`/
+/// `NbcRow` token shape, but *not* the same completion token: a plain
+/// `SqlBatch` SELECT ends in `Done`, while an RPC call (`sp_executesql`
+/// included) wraps the inner statement's completion in `DoneInProc` and
+/// only emits the outer `Done`/`DoneProc` for the whole call — found the
+/// hard way, `done_row_count` came back `None` against a real RPC response
+/// until `DoneProc`/`DoneInProc` were handled too, even though the row
+/// count was genuinely there, just on a different token type.
+fn parse_query_result(body: Bytes) -> Result<QueryResult, MssqlError> {
     let mut parser = TokenParser::new(body);
     let mut metadata: Option<ColMetaData> = None;
     let mut column_names = Vec::new();
@@ -406,6 +446,8 @@ pub async fn client_sql_batch(stream: &mut (impl AsyncRead + AsyncWrite + Unpin)
             }
             Token::Row(_) | Token::NbcRow(_) => row_count += 1,
             Token::Done(done) if done.status.count => done_row_count = Some(done.row_count),
+            Token::DoneProc(done) if done.status.count => done_row_count = Some(done.row_count),
+            Token::DoneInProc(done) if done.status.count => done_row_count = Some(done.row_count),
             Token::Error(err) => {
                 return Err(MssqlError::QueryFailed(format!(
                     "{} (state {}): {}",
@@ -488,33 +530,83 @@ pub async fn relay_sql_batch(
     write_tds_message(frontend, PacketType::TabularResult, &body).await
 }
 
+/// Relays one client request to `backend` **verbatim** — whatever
+/// `packet_type`/`body` actually are — and its response verbatim back to
+/// `frontend`, whatever packet type the backend used for *that*.
+///
+/// Unlike [`relay_sql_batch`] (which decodes SQL text and re-encodes a fresh
+/// `SqlBatch` packet), this never looks at the content at all: a proxy
+/// doesn't need to understand `SqlBatch` vs. `Rpc` (stored procedure calls —
+/// see [`client_rpc_call`]) vs. anything else TDS defines to forward it,
+/// only to know where a message starts and ends, which the TDS packet
+/// header already gives for free regardless of type. This is what makes
+/// [`run_proxy_session`] handle stored procedure calls and everything else
+/// without per-packet-type code.
+pub async fn relay_one_message(
+    backend: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    frontend: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    packet_type: PacketType,
+    body: &[u8],
+) -> Result<(), MssqlError> {
+    write_tds_message(backend, packet_type, body).await?;
+    let (response_type, response_body) = read_tds_message(backend).await?;
+    write_tds_message(frontend, response_type, &response_body).await
+}
+
 /// Runs a full proxy session on `frontend`: the PreLogin + LOGIN7 handshake
 /// (`check_credentials` decides success — see [`server_authenticate_with`]),
-/// then loops relaying `SqlBatch` requests to `backend` (already connected
-/// and authenticated by the caller) until `frontend` disconnects.
+/// then loops relaying every subsequent request to `backend` (already
+/// connected and authenticated by the caller) via [`relay_one_message`],
+/// verbatim, regardless of packet type — `SqlBatch`, `Rpc` (stored procedure
+/// calls), or anything else TDS defines, all pass through unexamined.
 ///
-/// Only `SqlBatch` is handled — any other packet type ends the session with
-/// [`MssqlError::UnexpectedPacketType`]. A clean disconnect (the frontend
-/// closing the connection between requests) ends the loop with `Ok(())`, not
-/// an error; anything else reading the next request is propagated as a real
-/// error. This doesn't yet distinguish "closed between requests" from
-/// "closed mid-packet" — both surface as the same `UnexpectedEof`, treated
-/// the same way (session over) — good enough for this milestone, worth
-/// splitting only if a real deployment needs to tell the two apart.
+/// A clean disconnect (the frontend closing the connection between
+/// requests) ends the loop with `Ok(())`, not an error; anything else
+/// reading the next request is propagated as a real error. This doesn't yet
+/// distinguish "closed between requests" from "closed mid-packet" — both
+/// surface as the same `UnexpectedEof`, treated the same way (session
+/// over) — good enough for this milestone, worth splitting only if a real
+/// deployment needs to tell the two apart.
 pub async fn run_proxy_session(
     frontend: &mut (impl AsyncRead + AsyncWrite + Unpin),
     backend: &mut (impl AsyncRead + AsyncWrite + Unpin),
     requested_encryption: EncryptionLevel,
     check_credentials: impl FnOnce(&str, &str) -> bool,
 ) -> Result<(), MssqlError> {
-    server_read_prelogin(frontend).await?;
+    let client_prelogin = server_read_prelogin(frontend).await?;
+    tracing::debug!(
+        client_requested_encryption = ?client_prelogin.encryption,
+        client_mars = client_prelogin.mars,
+        client_instance = ?client_prelogin.instance,
+        our_offer = ?requested_encryption,
+        "received client PreLogin"
+    );
     server_send_prelogin_response(
         frontend,
         &PreLogin::new().with_encryption(requested_encryption),
     )
     .await?;
 
-    if !server_authenticate_with(frontend, check_credentials).await? {
+    // Inlines server_authenticate_with's body instead of calling it, so the
+    // decoded LOGIN7 fields are available to log before the response is
+    // built — worth the small duplication for the diagnostics.
+    let login = server_read_login7(frontend).await?;
+    tracing::debug!(
+        username = %login.username,
+        hostname = %login.hostname,
+        app_name = %login.app_name,
+        database = %login.database,
+        integrated_security = login.option_flags2.integrated_security,
+        "received client LOGIN7"
+    );
+    let authenticated = check_credentials(&login.username, &login.password);
+    tracing::debug!(username = %login.username, authenticated, "credential check result");
+    if authenticated {
+        let response = build_login_success_response(login.tds_version.raw());
+        write_tds_message(frontend, PacketType::TabularResult, &response).await?;
+    } else {
+        let response = build_login_failure_response("Login failed for user");
+        write_tds_message(frontend, PacketType::TabularResult, &response).await?;
         return Err(MssqlError::LoginRejected(
             "credential check failed".to_string(),
         ));
@@ -524,23 +616,16 @@ pub async fn run_proxy_session(
         let (packet_type, body) = match read_tds_message(frontend).await {
             Ok(message) => message,
             Err(MssqlError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                tracing::debug!("frontend disconnected cleanly, ending session");
                 return Ok(());
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                tracing::warn!(error = %e, "error reading next client request");
+                return Err(e);
+            }
         };
-        match packet_type {
-            PacketType::SqlBatch => {
-                let sql = decode_sql_batch(&body)?;
-                relay_sql_batch(backend, frontend, &sql).await?;
-            }
-            other => {
-                return Err(MssqlError::UnexpectedPacketType(
-                    other,
-                    "unsupported packet type in proxy session (only SqlBatch handled so far)"
-                        .to_string(),
-                ));
-            }
-        }
+        tracing::debug!(?packet_type, body_len = body.len(), "relaying client request");
+        relay_one_message(backend, frontend, packet_type, &body).await?;
     }
 }
 
@@ -1038,6 +1123,68 @@ mod tests {
             .await
             .expect("server task panicked")
             .expect("a clean client disconnect between requests must end the session with Ok(()), not an error");
+    }
+
+    /// Answers a real question directly: does the proxy handle stored
+    /// procedure calls, not just ad-hoc `SqlBatch` text? Real drivers call
+    /// `sp_executesql` (and named stored procedures) via a dedicated `Rpc`
+    /// packet type, not a `SqlBatch` containing literal `EXEC ...` text.
+    /// Since `run_proxy_session` relays *any* packet type verbatim
+    /// (`relay_one_message`, not `relay_sql_batch`'s SqlBatch-specific
+    /// decode/re-encode), this needs no RPC-specific code in the session
+    /// loop at all — proven here with a genuine `RpcRequest::execute_sql`
+    /// packet against the real backend, parsed with the same
+    /// `client_rpc_call` a real caller would use.
+    #[tokio::test]
+    async fn proxy_session_relays_an_rpc_stored_procedure_call() {
+        if !live_test_enabled() {
+            eprintln!("skipping: set WARPGATE_MSSQL_TEST=1 to run against a live SQL Server");
+            return;
+        }
+        let password = std::env::var("WARPGATE_MSSQL_TEST_SA_PASSWORD")
+            .expect("WARPGATE_MSSQL_TEST_SA_PASSWORD must be set for the login test");
+
+        let mut backend = connect().await;
+        client_prelogin_handshake(&mut backend, EncryptionLevel::NotSupported)
+            .await
+            .expect("PreLogin handshake with the real backend");
+        client_login7_sql_auth(&mut backend, "sa", &password)
+            .await
+            .expect("LOGIN7 with the real backend should succeed");
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind an ephemeral loopback port");
+        let addr = listener.local_addr().expect("listener has a local address");
+
+        let server_task = tokio::spawn(async move {
+            let (mut frontend, _) = listener.accept().await.expect("accept");
+            run_proxy_session(&mut frontend, &mut backend, EncryptionLevel::NotSupported, |u, p| {
+                u == "proxyuser" && p == "proxypass"
+            })
+            .await
+        });
+
+        let mut client_stream = TcpStream::connect(addr).await.expect("connect to our proxy");
+        client_prelogin_handshake(&mut client_stream, EncryptionLevel::NotSupported)
+            .await
+            .expect("PreLogin handshake with our proxy");
+        client_login7_sql_auth(&mut client_stream, "proxyuser", "proxypass")
+            .await
+            .expect("LOGIN7 with our proxy should succeed");
+
+        let request = tds_protocol::RpcRequest::execute_sql("SELECT 1 AS n", vec![]);
+        let result = client_rpc_call(&mut client_stream, &request)
+            .await
+            .expect("sp_executesql relayed through our proxy should succeed");
+        assert_eq!(result.column_names, vec!["n".to_string()]);
+        assert_eq!(result.done_row_count, Some(1));
+
+        drop(client_stream);
+        server_task
+            .await
+            .expect("server task panicked")
+            .expect("a clean client disconnect must end the session with Ok(())");
     }
 
     #[tokio::test]
