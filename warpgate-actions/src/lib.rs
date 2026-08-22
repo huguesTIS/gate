@@ -65,6 +65,38 @@ pub async fn validate_grant_pairing(
     Ok(())
 }
 
+/// Reports one action's outcome to the audit console. `warpgate-core` already depends on
+/// `warpgate-actions` (for the `set_target()`/`remove_session()` hooks), so the reverse
+/// dependency needed to call `AuditEvent::emit()` directly would be circular. No new
+/// indirection is needed to route around it, though: `warpgate-core`'s `ValuesLogLayer`
+/// (see `warpgate-core/src/logging/layer.rs`) captures *any* tracing event whose target is
+/// `"audit"` (or starts with `"warpgate"`) into the persisted `log` table — it keys on the
+/// tracing target string, not on the `AuditEvent` Rust type, so emitting the same shape of
+/// event directly here (this crate already depends on `tracing`) reaches the console exactly
+/// like every `AuditEvent::emit()` call does.
+fn emit_action_audit_event(
+    definition: &ActionDefinition::Model,
+    phase: ExecutionPhase,
+    session_id: Uuid,
+    username: &str,
+    success: bool,
+    error: Option<&str>,
+) {
+    tracing::info!(
+        target: "audit",
+        _type = "ActionExecuted1",
+        action_definition_id = %definition.id,
+        action_name = %definition.name,
+        connector_type = ?definition.connector_type,
+        phase = ?phase,
+        session_id = %session_id,
+        username = %username,
+        success = success,
+        error = ?error,
+        "Ran action"
+    );
+}
+
 async fn run_connector(
     db: &DatabaseConnection,
     definition: &ActionDefinition::Model,
@@ -141,6 +173,14 @@ pub async fn run_pre_session_actions(
         match run_connector(db, &definition, username, true).await {
             Ok(()) => {
                 mark_execution(db, execution.id, ExecutionStatus::Succeeded, None).await?;
+                emit_action_audit_event(
+                    &definition,
+                    ExecutionPhase::PreSession,
+                    session_id,
+                    username,
+                    true,
+                    None,
+                );
                 // Safe to unwrap — validate_grant_pairing above guarantees this.
                 schedule_remove(db, session_id, definition.paired_action_id.unwrap(), context)
                     .await?;
@@ -148,6 +188,14 @@ pub async fn run_pre_session_actions(
             Err(err) => {
                 mark_execution(db, execution.id, ExecutionStatus::Failed, Some(err.to_string()))
                     .await?;
+                emit_action_audit_event(
+                    &definition,
+                    ExecutionPhase::PreSession,
+                    session_id,
+                    username,
+                    false,
+                    Some(&err.to_string()),
+                );
                 if definition.continue_on_error {
                     warn!(action = %definition.name, error = %err, "Grant action failed, continuing (continue_on_error)");
                 } else {
@@ -238,6 +286,14 @@ async fn run_one_removal(
     match run_connector(db, &definition, &username, false).await {
         Ok(()) => {
             mark_execution(db, execution.id, ExecutionStatus::Succeeded, None).await?;
+            emit_action_audit_event(
+                &definition,
+                execution.phase,
+                execution.session_id,
+                &username,
+                true,
+                None,
+            );
         }
         Err(err) => {
             let give_up = definition.continue_on_error || attempts >= MAX_REMOVE_ATTEMPTS;
@@ -249,6 +305,17 @@ async fn run_one_removal(
             } else {
                 warn!(action = %definition.name, error = %err, attempts, "Remove action failed, will retry");
             }
+            // Reported on every failed attempt, not just the terminal one — an operator
+            // watching the console during an incident wants to see retries happening in
+            // real time, not just the eventual give-up.
+            emit_action_audit_event(
+                &definition,
+                execution.phase,
+                execution.session_id,
+                &username,
+                false,
+                Some(&err.to_string()),
+            );
             mark_execution(
                 db,
                 execution.id,
