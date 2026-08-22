@@ -15,9 +15,11 @@
 //! handshake is proven out against a real Dockerized SQL Server.
 
 mod login7_decode;
+mod server_tokens;
 
 use bytes::{Bytes, BytesMut};
 pub use login7_decode::decode_login7;
+pub use server_tokens::{build_login_failure_response, build_login_success_response};
 use tds_protocol::{
     ColMetaData, EncryptionLevel, Login7, PacketHeader, PacketStatus, PacketType, PreLogin,
     SqlBatch, Token, TokenParser,
@@ -198,14 +200,9 @@ pub async fn server_send_prelogin_response(
 /// leaves open (no `Login7::decode()` at all, see [`login7_decode`]'s module
 /// docs for why and how this fills it in by hand against MS-TDS directly).
 ///
-/// This only gets the client's credentials off the wire; it does not check
-/// them or send any response. Sending a LOGINACK/Error token back is a
-/// *separate* gap this crate doesn't close yet either — `tds-protocol` has
-/// no encoder for those tokens (only `Done`/`DoneProc`/`DoneInProc` have
-/// both directions; `LoginAck` and `ServerError`/`Token::Error` are
-/// decode-only, the same client-only asymmetry as LOGIN7 but the other way
-/// around). Both gaps get closed together once there's a real credential
-/// check to respond to.
+/// Only gets the credentials off the wire; does not check them or send a
+/// response — see [`server_authenticate_sql`] for the full request-check-
+/// respond flow.
 pub async fn server_read_login7(stream: &mut TcpStream) -> Result<Login7, MssqlError> {
     let (packet_type, body) = read_tds_message(stream).await?;
     if packet_type != PacketType::Tds7Login {
@@ -215,6 +212,34 @@ pub async fn server_read_login7(stream: &mut TcpStream) -> Result<Login7, MssqlE
         ));
     }
     decode_login7(&body)
+}
+
+/// Reads a client's LOGIN7 request and checks it against
+/// `expected_username`/`expected_password`, sending LOGINACK (success) or
+/// Error (failure) plus a trailing DONE token either way — see
+/// [`server_tokens`]'s module docs for how those responses are built (the
+/// other half of the gap `tds-protocol` leaves for LOGIN7: no `LoginAck`/
+/// `Error` encoder either).
+///
+/// The equality check itself is a placeholder for this milestone, **not**
+/// real credential verification — no Warpgate `ConfigProvider`/auth
+/// integration exists yet (this crate isn't even a dependency of `warpgate`
+/// — see the crate-level docs). Returns whether the login succeeded.
+pub async fn server_authenticate_sql(
+    stream: &mut TcpStream,
+    expected_username: &str,
+    expected_password: &str,
+) -> Result<bool, MssqlError> {
+    let login = server_read_login7(stream).await?;
+    if login.username == expected_username && login.password == expected_password {
+        let response = build_login_success_response(login.tds_version.raw());
+        write_tds_message(stream, PacketType::TabularResult, &response).await?;
+        Ok(true)
+    } else {
+        let response = build_login_failure_response("Login failed for user");
+        write_tds_message(stream, PacketType::TabularResult, &response).await?;
+        Ok(false)
+    }
 }
 
 /// Sends a LOGIN7 packet authenticating as `username`/`password` (SQL
@@ -383,6 +408,79 @@ mod tests {
         assert_eq!(decoded.app_name, "warpgate-protocol-mssql-test");
         assert_eq!(decoded.database, "mydb");
         assert!(!decoded.option_flags2.integrated_security, "with_sql_auth must clear integrated_security");
+    }
+
+    /// The full loop closed: this crate's own `client_prelogin_handshake` +
+    /// `client_login7_sql_auth` against this crate's own
+    /// `server_read_prelogin`/`server_send_prelogin_response` +
+    /// `server_authenticate_sql` — first time both directions of the
+    /// handshake interoperate. Pure loopback, no Docker container.
+    #[tokio::test]
+    async fn server_authenticates_a_client_with_matching_credentials() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind an ephemeral loopback port");
+        let addr = listener.local_addr().expect("listener has a local address");
+
+        let server_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            server_read_prelogin(&mut stream).await.expect("decode PreLogin");
+            server_send_prelogin_response(
+                &mut stream,
+                &PreLogin::new().with_encryption(EncryptionLevel::NotSupported),
+            )
+            .await
+            .expect("send PreLogin response");
+
+            server_authenticate_sql(&mut stream, "sa", "correct-horse-battery-staple")
+                .await
+                .expect("authenticate")
+        });
+
+        let mut client_stream = TcpStream::connect(addr).await.expect("connect to our own server");
+        client_prelogin_handshake(&mut client_stream, EncryptionLevel::NotSupported)
+            .await
+            .expect("PreLogin handshake");
+        client_login7_sql_auth(&mut client_stream, "sa", "correct-horse-battery-staple")
+            .await
+            .expect("LOGIN7 with matching credentials should succeed");
+
+        assert!(server_task.await.expect("server task panicked"));
+    }
+
+    #[tokio::test]
+    async fn server_rejects_a_client_with_wrong_credentials() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind an ephemeral loopback port");
+        let addr = listener.local_addr().expect("listener has a local address");
+
+        let server_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            server_read_prelogin(&mut stream).await.expect("decode PreLogin");
+            server_send_prelogin_response(
+                &mut stream,
+                &PreLogin::new().with_encryption(EncryptionLevel::NotSupported),
+            )
+            .await
+            .expect("send PreLogin response");
+
+            server_authenticate_sql(&mut stream, "sa", "correct-horse-battery-staple")
+                .await
+                .expect("authenticate")
+        });
+
+        let mut client_stream = TcpStream::connect(addr).await.expect("connect to our own server");
+        client_prelogin_handshake(&mut client_stream, EncryptionLevel::NotSupported)
+            .await
+            .expect("PreLogin handshake");
+        let result = client_login7_sql_auth(&mut client_stream, "sa", "wrong-password").await;
+
+        assert!(
+            matches!(result, Err(MssqlError::LoginRejected(_))),
+            "wrong password must be rejected as LoginRejected, got {result:?}"
+        );
+        assert!(!server_task.await.expect("server task panicked"));
     }
 
     async fn connect() -> TcpStream {
