@@ -236,6 +236,46 @@ pub async fn server_send_prelogin_response(
     write_tds_message(stream, PacketType::TabularResult, &response.encode()).await
 }
 
+/// Upgrades an accepted connection to TLS, TDS 7.x style — the server-side
+/// counterpart to [`client_upgrade_to_tls`]. **Must** be called right after
+/// [`server_send_prelogin_response`] sent a response indicating encryption
+/// (mirrors the client side's requirement).
+///
+/// `mssql-tls` is a client-only crate (see the crate docs), so it has no
+/// `TlsAcceptor` of its own — but `TlsPreloginWrapper` (the piece that
+/// wraps/unwraps the TLS handshake inside `PreLogin` packets) is direction-
+/// agnostic, a plain `AsyncRead`/`AsyncWrite` adapter with no client-specific
+/// logic in it, so it works unchanged with a caller-supplied
+/// `tokio_rustls::TlsAcceptor` instead of `mssql-tls`'s `TlsConnector`. The
+/// `TlsAcceptor` itself (and the certificate/key behind it) is the caller's
+/// responsibility — a real deployment needs a real certificate, not
+/// something this crate should generate.
+///
+/// **`acceptor` must be restricted to TLS 1.2** (e.g.
+/// `ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS12])`).
+/// TLS 1.3 hits a real, reproduced bug in `mssql-tls`'s `TlsPreloginWrapper`
+/// when driven by a `TlsAcceptor` (as opposed to `TlsConnector`, the only
+/// role its own test suite exercises): the connection breaks with a
+/// `rustls` `InvalidContentType` error on the very first message sent after
+/// the handshake. Root-caused via wire-level tracing to TLS 1.3's
+/// server-sent post-handshake `NewSessionTicket` — forcing TLS 1.2 (which
+/// has no such message) makes the failure disappear completely and
+/// repeatably; see `server_accepts_a_tls_client_and_completes_login`'s test
+/// doc comment for the full writeup. Not something to work around inside
+/// this crate — it's an upstream bug in code we don't own.
+pub async fn server_upgrade_to_tls<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: S,
+    acceptor: &tokio_rustls::TlsAcceptor,
+) -> Result<tokio_rustls::server::TlsStream<TlsPreloginWrapper<S>>, MssqlError> {
+    let wrapper = TlsPreloginWrapper::new(stream);
+    let mut tls_stream = acceptor.accept(wrapper).await?;
+    // get_mut() returns (&mut IO, &mut ServerConnection) — same shape as the
+    // client-side TlsStream mssql-tls's own connect_with_prelogin() uses;
+    // .0 is our wrapper.
+    tls_stream.get_mut().0.handshake_complete();
+    Ok(tls_stream)
+}
+
 /// Reads and decodes a client's LOGIN7 request — a real gap `tds-protocol`
 /// leaves open (no `Login7::decode()` at all, see [`login7_decode`]'s module
 /// docs for why and how this fills it in by hand against MS-TDS directly).
@@ -552,6 +592,97 @@ mod tests {
 
         server_task.await.expect("server task panicked");
         assert_eq!(response.encryption, EncryptionLevel::NotSupported);
+    }
+
+    /// `server_upgrade_to_tls` against `client_upgrade_to_tls` — the server
+    /// side of TLS-in-TDS, proven the same way the client side was: pure
+    /// loopback, no Docker container, with a throwaway self-signed
+    /// certificate generated on the fly (`rcgen`, same crate the rest of
+    /// this codebase already uses for exactly this — see
+    /// `warpgate/src/commands/setup.rs`). PreLogin negotiates encryption in
+    /// the clear first, matching TDS 7.x and how a real proxy session would
+    /// need to sequence this — only *then* does either side upgrade.
+    ///
+    /// **Real bug found and root-caused in `mssql-tls` itself, not this
+    /// crate**: with TLS 1.3 (the default — `TlsConfig`/`ServerConfig`
+    /// otherwise both allow 1.2 and 1.3), the connection consistently broke
+    /// with a `rustls` `InvalidContentType` error on the very first message
+    /// sent after the handshake (LOGIN7), specifically when
+    /// `TlsPreloginWrapper` is driven by a `TlsAcceptor` (server role) rather
+    /// than `mssql-tls`'s own `TlsConnector` (client role, the only role the
+    /// crate's own test suite exercises). Traced with wire-level logging: the
+    /// client had already flushed its post-handshake LOGIN7 by the time the
+    /// server's handshake future even resolved, meaning TLS 1.3's
+    /// server-sent post-handshake `NewSessionTicket` message was still in
+    /// flight/unprocessed when `handshake_complete()` flips the wrapper to
+    /// passthrough — the likely mechanism: leftover partially-read
+    /// `TlsPreloginWrapper` header/payload state gets stranded and the next
+    /// passthrough read starts at the wrong stream offset. Forcing TLS 1.2
+    /// (no post-handshake `NewSessionTicket`) makes the failure disappear
+    /// completely and repeatably — strong confirmation, not a guess.
+    /// Workaround: pin the server side to TLS 1.2 via
+    /// `ServerConfig::builder_with_protocol_versions`, documented here rather
+    /// than silently — a real deployment needing 1.3 will hit this until
+    /// it's fixed upstream or a different TLS-in-TDS implementation is used
+    /// for the server side.
+    #[tokio::test]
+    async fn server_accepts_a_tls_client_and_completes_login() {
+        // mssql-tls installs this too (see its connector module), but the
+        // server and client tasks below race to be first, so install it
+        // explicitly up front rather than relying on which one wins.
+        let _ = rustls::crypto::ring::default_provider().install_default();
+
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+            .expect("generate a throwaway self-signed certificate");
+        let cert_der = cert.cert.der().clone();
+        let key_der =
+            rustls::pki_types::PrivateKeyDer::Pkcs8(cert.signing_key.serialize_der().into());
+        // TLS 1.2 only — see this test's doc comment for the TLS 1.3 bug in
+        // mssql-tls's TlsPreloginWrapper this works around.
+        let server_config =
+            rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS12])
+                .with_no_client_auth()
+                .with_single_cert(vec![cert_der], key_der)
+                .expect("build a rustls ServerConfig from the throwaway cert");
+        let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_config));
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind an ephemeral loopback port");
+        let addr = listener.local_addr().expect("listener has a local address");
+
+        let server_task = tokio::spawn(async move {
+            let (mut raw_stream, _) = listener.accept().await.expect("accept");
+            server_read_prelogin(&mut raw_stream).await.expect("decode client's PreLogin");
+            server_send_prelogin_response(
+                &mut raw_stream,
+                &PreLogin::new().with_encryption(EncryptionLevel::On),
+            )
+            .await
+            .expect("send PreLogin response");
+
+            let mut tls_stream = server_upgrade_to_tls(raw_stream, &acceptor)
+                .await
+                .expect("server-side TLS handshake");
+
+            server_authenticate_with(&mut tls_stream, |u, p| u == "tlsuser" && p == "tlspass")
+                .await
+                .expect("authenticate over TLS")
+        });
+
+        let mut client_stream = TcpStream::connect(addr).await.expect("connect to our own server");
+        client_prelogin_handshake(&mut client_stream, EncryptionLevel::Required)
+            .await
+            .expect("PreLogin handshake requesting encryption");
+
+        let mut client_tls_stream = client_upgrade_to_tls(client_stream, "localhost", true)
+            .await
+            .expect("client-side TLS handshake");
+        client_login7_sql_auth(&mut client_tls_stream, "tlsuser", "tlspass")
+            .await
+            .expect("LOGIN7 over TLS against our own server should succeed");
+
+        assert!(server_task.await.expect("server task panicked"));
     }
 
     /// Proves the hand-written `decode_login7` against a real `Login7::encode()`

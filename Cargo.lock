@@ -9494,9 +9494,12 @@ version = "0.28.2"
 dependencies = [
  "bytes",
  "mssql-tls",
+ "rcgen",
+ "rustls 0.23.43",
  "tds-protocol",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-rustls 0.26.4",
  "tracing",
 ]
 
