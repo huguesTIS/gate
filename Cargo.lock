@@ -9050,6 +9050,7 @@ dependencies = [
 name = "warpgate-actions"
 version = "0.28.0-beta.4"
 dependencies = [
+ "data-encoding",
  "ldap3",
  "russh",
  "sea-orm",

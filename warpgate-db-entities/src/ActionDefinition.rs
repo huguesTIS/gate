@@ -24,6 +24,15 @@ pub enum ConnectorType {
     /// Run a single templated PowerShell script over WinRM on a fixed admin credential.
     #[sea_orm(string_value = "winrm_powershell")]
     WinrmPowershell,
+    /// Grant/revoke passwordless sudo for a fixed command list via a `/etc/sudoers.d/` drop-in.
+    #[sea_orm(string_value = "linux_sudoers_rule")]
+    LinuxSudoersRule,
+    /// Add/remove the target user from a local Windows group.
+    #[sea_orm(string_value = "windows_local_group")]
+    WindowsLocalGroup,
+    /// Add/remove the target user from an Active Directory domain group (via WinRM/RSAT).
+    #[sea_orm(string_value = "ad_domain_group")]
+    AdDomainGroup,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Object)]

@@ -6,6 +6,7 @@ license = "Apache-2.0"
 publish = false
 
 [dependencies]
+data-encoding.workspace = true
 ldap3.workspace = true
 russh.workspace = true
 sea-orm.workspace = true

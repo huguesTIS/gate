@@ -125,6 +125,27 @@ async fn run_connector(
                 connectors::winrm_powershell::remove(db, &definition.config, username).await
             }
         }
+        ConnectorType::LinuxSudoersRule => {
+            if is_grant {
+                connectors::linux_sudoers_rule::grant(db, &definition.config, username).await
+            } else {
+                connectors::linux_sudoers_rule::remove(db, &definition.config, username).await
+            }
+        }
+        ConnectorType::WindowsLocalGroup => {
+            if is_grant {
+                connectors::windows_local_group::grant(db, &definition.config, username).await
+            } else {
+                connectors::windows_local_group::remove(db, &definition.config, username).await
+            }
+        }
+        ConnectorType::AdDomainGroup => {
+            if is_grant {
+                connectors::ad_domain_group::grant(db, &definition.config, username).await
+            } else {
+                connectors::ad_domain_group::remove(db, &definition.config, username).await
+            }
+        }
     }
 }
 
