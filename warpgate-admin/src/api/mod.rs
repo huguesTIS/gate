@@ -31,6 +31,7 @@ mod sessions_detail;
 pub mod sessions_list;
 mod ssh_connection_test;
 mod ssh_keys;
+mod ssh_credentials;
 mod sso_credentials;
 mod target_groups;
 mod target_labels;
@@ -41,6 +42,7 @@ mod tickets_detail;
 mod tickets_list;
 pub mod users;
 mod user_groups;
+mod winrm_credentials;
 
 pub use warpgate_common::api::AnySecurityScheme;
 
@@ -101,6 +103,8 @@ pub fn get() -> impl OpenApi {
                 managed_accounts::SecretApi,
             ),
             target_labels::LabelsApi,
+            (ssh_credentials::ListApi, ssh_credentials::DetailApi),
+            (winrm_credentials::ListApi, winrm_credentials::DetailApi),
         ),
     )
 }
