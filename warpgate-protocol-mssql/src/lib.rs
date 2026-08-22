@@ -232,8 +232,22 @@ pub async fn server_authenticate_sql(
     expected_username: &str,
     expected_password: &str,
 ) -> Result<bool, MssqlError> {
+    server_authenticate_with(stream, |username, password| {
+        username == expected_username && password == expected_password
+    })
+    .await
+}
+
+/// Same as [`server_authenticate_sql`], but with the credential check
+/// supplied by the caller instead of a fixed username/password — what
+/// [`run_proxy_session`] uses, since a real deployment needs to check
+/// against Warpgate's own auth, not one hardcoded pair.
+pub async fn server_authenticate_with(
+    stream: &mut TcpStream,
+    check_credentials: impl FnOnce(&str, &str) -> bool,
+) -> Result<bool, MssqlError> {
     let login = server_read_login7(stream).await?;
-    if login.username == expected_username && login.password == expected_password {
+    if check_credentials(&login.username, &login.password) {
         let response = build_login_success_response(login.tds_version.raw());
         write_tds_message(stream, PacketType::TabularResult, &response).await?;
         Ok(true)
@@ -394,6 +408,62 @@ pub async fn relay_sql_batch(
     }
 
     write_tds_message(frontend, PacketType::TabularResult, &body).await
+}
+
+/// Runs a full proxy session on `frontend`: the PreLogin + LOGIN7 handshake
+/// (`check_credentials` decides success — see [`server_authenticate_with`]),
+/// then loops relaying `SqlBatch` requests to `backend` (already connected
+/// and authenticated by the caller) until `frontend` disconnects.
+///
+/// Only `SqlBatch` is handled — any other packet type ends the session with
+/// [`MssqlError::UnexpectedPacketType`]. A clean disconnect (the frontend
+/// closing the connection between requests) ends the loop with `Ok(())`, not
+/// an error; anything else reading the next request is propagated as a real
+/// error. This doesn't yet distinguish "closed between requests" from
+/// "closed mid-packet" — both surface as the same `UnexpectedEof`, treated
+/// the same way (session over) — good enough for this milestone, worth
+/// splitting only if a real deployment needs to tell the two apart.
+pub async fn run_proxy_session(
+    frontend: &mut TcpStream,
+    backend: &mut TcpStream,
+    requested_encryption: EncryptionLevel,
+    check_credentials: impl FnOnce(&str, &str) -> bool,
+) -> Result<(), MssqlError> {
+    server_read_prelogin(frontend).await?;
+    server_send_prelogin_response(
+        frontend,
+        &PreLogin::new().with_encryption(requested_encryption),
+    )
+    .await?;
+
+    if !server_authenticate_with(frontend, check_credentials).await? {
+        return Err(MssqlError::LoginRejected(
+            "credential check failed".to_string(),
+        ));
+    }
+
+    loop {
+        let (packet_type, body) = match read_tds_message(frontend).await {
+            Ok(message) => message,
+            Err(MssqlError::Io(e)) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
+        match packet_type {
+            PacketType::SqlBatch => {
+                let sql = decode_sql_batch(&body)?;
+                relay_sql_batch(backend, frontend, &sql).await?;
+            }
+            other => {
+                return Err(MssqlError::UnexpectedPacketType(
+                    other,
+                    "unsupported packet type in proxy session (only SqlBatch handled so far)"
+                        .to_string(),
+                ));
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -692,6 +762,69 @@ mod tests {
         assert_eq!(result.column_names, vec!["n".to_string()]);
         assert_eq!(result.row_count, 1);
         assert_eq!(result.done_row_count, Some(1));
+    }
+
+    /// `run_proxy_session` end to end: a real session, not one query on an
+    /// already-open connection like the test above. Two different queries
+    /// over the same connection (proving the loop actually loops, not just
+    /// handles one request and happens to work), then the client disconnects
+    /// and the server task must return `Ok(())` — a clean hang-up between
+    /// requests is the end of a session, not an error.
+    #[tokio::test]
+    async fn proxy_session_handles_multiple_queries_then_a_clean_disconnect() {
+        if !live_test_enabled() {
+            eprintln!("skipping: set WARPGATE_MSSQL_TEST=1 to run against a live SQL Server");
+            return;
+        }
+        let password = std::env::var("WARPGATE_MSSQL_TEST_SA_PASSWORD")
+            .expect("WARPGATE_MSSQL_TEST_SA_PASSWORD must be set for the login test");
+
+        let mut backend = connect().await;
+        client_prelogin_handshake(&mut backend, EncryptionLevel::NotSupported)
+            .await
+            .expect("PreLogin handshake with the real backend");
+        client_login7_sql_auth(&mut backend, "sa", &password)
+            .await
+            .expect("LOGIN7 with the real backend should succeed");
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind an ephemeral loopback port");
+        let addr = listener.local_addr().expect("listener has a local address");
+
+        let server_task = tokio::spawn(async move {
+            let (mut frontend, _) = listener.accept().await.expect("accept");
+            run_proxy_session(&mut frontend, &mut backend, EncryptionLevel::NotSupported, |u, p| {
+                u == "proxyuser" && p == "proxypass"
+            })
+            .await
+        });
+
+        let mut client_stream = TcpStream::connect(addr).await.expect("connect to our proxy");
+        client_prelogin_handshake(&mut client_stream, EncryptionLevel::NotSupported)
+            .await
+            .expect("PreLogin handshake with our proxy");
+        client_login7_sql_auth(&mut client_stream, "proxyuser", "proxypass")
+            .await
+            .expect("LOGIN7 with our proxy should succeed");
+
+        let first = client_sql_batch(&mut client_stream, "SELECT 1 AS n")
+            .await
+            .expect("first query relayed through our proxy should succeed");
+        assert_eq!(first.column_names, vec!["n".to_string()]);
+        assert_eq!(first.done_row_count, Some(1));
+
+        let second = client_sql_batch(&mut client_stream, "SELECT 2 AS m")
+            .await
+            .expect("second query on the same session should also succeed");
+        assert_eq!(second.column_names, vec!["m".to_string()]);
+        assert_eq!(second.done_row_count, Some(1));
+
+        drop(client_stream);
+        server_task
+            .await
+            .expect("server task panicked")
+            .expect("a clean client disconnect between requests must end the session with Ok(()), not an error");
     }
 
     #[tokio::test]
