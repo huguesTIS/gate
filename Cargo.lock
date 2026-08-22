@@ -4457,6 +4457,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "mssql-tls"
+version = "0.20.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fe28487a05273a5c5e17bb0624d07366a2dcce8da6f6af88f076fd4ee5aa8d5"
+dependencies = [
+ "rustls 0.23.43",
+ "thiserror 2.0.20",
+ "tokio",
+ "tokio-rustls 0.26.4",
+ "tracing",
+ "webpki-roots 1.0.7",
+]
+
+[[package]]
 name = "multer"
 version = "3.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9479,6 +9493,7 @@ name = "warpgate-protocol-mssql"
 version = "0.28.2"
 dependencies = [
  "bytes",
+ "mssql-tls",
  "tds-protocol",
  "thiserror 2.0.20",
  "tokio",

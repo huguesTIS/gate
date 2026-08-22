@@ -13,19 +13,27 @@
 //! workspace member so `cargo check -p warpgate-protocol-mssql` builds in
 //! isolation (no `warpgate-core`/full-binary recompile) while the low-level
 //! handshake is proven out against a real Dockerized SQL Server.
+//!
+//! Every function below that touches the wire is generic over
+//! `impl AsyncRead + AsyncWrite + Unpin` rather than hardcoded to
+//! `TcpStream` — the point being TLS-in-TDS (see [`client_upgrade_to_tls`]):
+//! a `TlsStream<TlsPreloginWrapper<TcpStream>>` satisfies the same bound, so
+//! `client_login7_sql_auth`/`client_sql_batch`/`run_proxy_session`/etc. work
+//! unchanged over an encrypted connection, no separate encrypted-path copies
+//! of any of this logic needed.
 
 mod login7_decode;
 mod server_tokens;
 
 use bytes::{Bytes, BytesMut};
 pub use login7_decode::decode_login7;
+use mssql_tls::{TlsConfig, TlsConnector, TlsPreloginWrapper};
 pub use server_tokens::{build_login_failure_response, build_login_success_response};
 use tds_protocol::{
     ColMetaData, EncryptionLevel, Login7, PacketHeader, PacketStatus, PacketType, PreLogin,
     SqlBatch, Token, TokenParser,
 };
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MssqlError {
@@ -43,6 +51,10 @@ pub enum MssqlError {
     MalformedLogin7(String),
     #[error("malformed SqlBatch packet: {0}")]
     MalformedSqlBatch(String),
+    #[error("TLS error: {0}")]
+    Tls(#[from] mssql_tls::TlsError),
+    #[error("server does not support encryption, cannot upgrade to TLS")]
+    EncryptionNotSupported,
 }
 
 /// Result of a `SqlBatch`, deliberately shallow: this milestone proves the
@@ -80,7 +92,7 @@ fn describe_unexpected_packet(body: Bytes) -> String {
 /// set on the only packet). Every request this crate sends so far fits in one
 /// packet, well under `DEFAULT_PACKET_SIZE`.
 async fn write_tds_message(
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
     packet_type: PacketType,
     payload: &[u8],
 ) -> Result<(), MssqlError> {
@@ -103,7 +115,7 @@ async fn write_tds_message(
 /// once a real database/collation is attached, even though today's PreLogin
 /// and simple-auth responses fit in one; reading this way now avoids a silent
 /// truncation bug once that stops being true.
-async fn read_tds_message(stream: &mut TcpStream) -> Result<(PacketType, Bytes), MssqlError> {
+async fn read_tds_message(stream: &mut (impl AsyncRead + AsyncWrite + Unpin)) -> Result<(PacketType, Bytes), MssqlError> {
     let mut full_body = BytesMut::new();
     let mut packet_type = None;
     loop {
@@ -133,17 +145,14 @@ async fn read_tds_message(stream: &mut TcpStream) -> Result<(PacketType, Bytes),
 /// decoded response. `requested_encryption` is this crate's own choice, not
 /// necessarily what gets negotiated — the server may still report a
 /// different level in its response; the caller must honor *that* (e.g. by
-/// wrapping the connection in TLS before continuing) rather than what it
-/// asked for. TLS-in-TDS isn't implemented yet, so callers should request
-/// [`EncryptionLevel::NotSupported`] until it is — asking for anything the
-/// server insists on encrypting will fail the next step (LOGIN7 sent in the
-/// clear when the server expects a TLS ClientHello first).
+/// wrapping the connection in TLS before continuing, see
+/// [`client_upgrade_to_tls`]) rather than what it asked for.
 ///
 /// This is the client side of the handshake (dialing a real backend as if we
 /// were the proxied client) — proves `tds-protocol`'s encode/decode against a
 /// real server before any server-side (listener) code is written.
 pub async fn client_prelogin_handshake(
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
     requested_encryption: EncryptionLevel,
 ) -> Result<PreLogin, MssqlError> {
     let request = PreLogin::new().with_encryption(requested_encryption);
@@ -169,13 +178,42 @@ pub async fn client_prelogin_handshake(
     Ok(PreLogin::decode(body.as_ref())?)
 }
 
+/// Upgrades `stream` to TLS, TDS 7.x style: the handshake is wrapped inside
+/// `PreLogin`-typed packets rather than sent as raw TLS records — real SQL
+/// Server (and any real client) expects that; see
+/// `mssql_tls::TlsPreloginWrapper`'s module docs. **Must** be called right
+/// after a [`client_prelogin_handshake`] whose response indicated the server
+/// supports encryption (`response.encryption.is_required()`, or plain `On`)
+/// — calling this against a server that answered `NotSupported`/`Off` sends
+/// a TLS ClientHello the server isn't expecting.
+///
+/// `trust_server_certificate` skips certificate validation entirely —
+/// `mssql-tls`'s own docs are explicit this is for development only (e.g.
+/// against a throwaway Docker container's self-generated cert, which is all
+/// this crate has been tested against so far). A real deployment needs a
+/// real CA or an explicit pinned certificate instead.
+///
+/// Consumes `stream` and returns the TLS-wrapped replacement — every
+/// function in this crate taking `impl AsyncRead + AsyncWrite + Unpin`
+/// (LOGIN7, SqlBatch, the proxy session loop, all of it) works unchanged
+/// against what this returns, no separate encrypted-path logic needed.
+pub async fn client_upgrade_to_tls<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: S,
+    server_name: &str,
+    trust_server_certificate: bool,
+) -> Result<mssql_tls::TlsStream<TlsPreloginWrapper<S>>, MssqlError> {
+    let config = TlsConfig::new().trust_server_certificate(trust_server_certificate);
+    let connector = TlsConnector::new(config)?;
+    Ok(connector.connect_with_prelogin(stream, server_name).await?)
+}
+
 /// Reads and decodes a client's PreLogin request. Server-side counterpart to
 /// [`client_prelogin_handshake`]'s outbound half — the first piece of the
 /// *listener* side of the protocol (accepting a connection), as opposed to
 /// every function above, which dials one. `tds-protocol`'s `PreLogin::decode`
 /// is direction-agnostic (used here for the request, above for the response),
 /// so no new wire-format code was needed for this half — unlike LOGIN7 below.
-pub async fn server_read_prelogin(stream: &mut TcpStream) -> Result<PreLogin, MssqlError> {
+pub async fn server_read_prelogin(stream: &mut (impl AsyncRead + AsyncWrite + Unpin)) -> Result<PreLogin, MssqlError> {
     let (packet_type, body) = read_tds_message(stream).await?;
     if packet_type != PacketType::PreLogin {
         return Err(MssqlError::UnexpectedPacketType(
@@ -192,7 +230,7 @@ pub async fn server_read_prelogin(stream: &mut TcpStream) -> Result<PreLogin, Ms
 /// `PreLogin` (0x12) — any real client, including this crate's own
 /// `client_prelogin_handshake`, expects that.
 pub async fn server_send_prelogin_response(
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
     response: &PreLogin,
 ) -> Result<(), MssqlError> {
     write_tds_message(stream, PacketType::TabularResult, &response.encode()).await
@@ -205,7 +243,7 @@ pub async fn server_send_prelogin_response(
 /// Only gets the credentials off the wire; does not check them or send a
 /// response — see [`server_authenticate_sql`] for the full request-check-
 /// respond flow.
-pub async fn server_read_login7(stream: &mut TcpStream) -> Result<Login7, MssqlError> {
+pub async fn server_read_login7(stream: &mut (impl AsyncRead + AsyncWrite + Unpin)) -> Result<Login7, MssqlError> {
     let (packet_type, body) = read_tds_message(stream).await?;
     if packet_type != PacketType::Tds7Login {
         return Err(MssqlError::UnexpectedPacketType(
@@ -228,7 +266,7 @@ pub async fn server_read_login7(stream: &mut TcpStream) -> Result<Login7, MssqlE
 /// integration exists yet (this crate isn't even a dependency of `warpgate`
 /// — see the crate-level docs). Returns whether the login succeeded.
 pub async fn server_authenticate_sql(
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
     expected_username: &str,
     expected_password: &str,
 ) -> Result<bool, MssqlError> {
@@ -243,7 +281,7 @@ pub async fn server_authenticate_sql(
 /// [`run_proxy_session`] uses, since a real deployment needs to check
 /// against Warpgate's own auth, not one hardcoded pair.
 pub async fn server_authenticate_with(
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
     check_credentials: impl FnOnce(&str, &str) -> bool,
 ) -> Result<bool, MssqlError> {
     let login = server_read_login7(stream).await?;
@@ -265,7 +303,7 @@ pub async fn server_authenticate_with(
 /// LOGIN7 (and the password inside it, only TDS-obfuscated, not encrypted;
 /// see `tds_protocol::login7`'s module docs) in the clear.
 pub async fn client_login7_sql_auth(
-    stream: &mut TcpStream,
+    stream: &mut (impl AsyncRead + AsyncWrite + Unpin),
     username: &str,
     password: &str,
 ) -> Result<(), MssqlError> {
@@ -302,7 +340,7 @@ pub async fn client_login7_sql_auth(
 /// Sends `sql` as a `SqlBatch` request and reads the response, counting rows
 /// and collecting column names. **Must** be called after a successful
 /// [`client_login7_sql_auth`] on the same connection.
-pub async fn client_sql_batch(stream: &mut TcpStream, sql: &str) -> Result<QueryResult, MssqlError> {
+pub async fn client_sql_batch(stream: &mut (impl AsyncRead + AsyncWrite + Unpin), sql: &str) -> Result<QueryResult, MssqlError> {
     let payload = SqlBatch::new(sql).encode();
     write_tds_message(stream, PacketType::SqlBatch, &payload).await?;
 
@@ -368,7 +406,7 @@ fn decode_sql_batch(data: &[u8]) -> Result<String, MssqlError> {
 }
 
 /// Reads and decodes a client's `SqlBatch` request, returning the SQL text.
-pub async fn server_read_sql_batch(stream: &mut TcpStream) -> Result<String, MssqlError> {
+pub async fn server_read_sql_batch(stream: &mut (impl AsyncRead + AsyncWrite + Unpin)) -> Result<String, MssqlError> {
     let (packet_type, body) = read_tds_message(stream).await?;
     if packet_type != PacketType::SqlBatch {
         return Err(MssqlError::UnexpectedPacketType(
@@ -392,8 +430,8 @@ pub async fn server_read_sql_batch(stream: &mut TcpStream) -> Result<String, Mss
 /// relayed bytes exactly as if they came straight from the backend, because
 /// they did.
 pub async fn relay_sql_batch(
-    backend: &mut TcpStream,
-    frontend: &mut TcpStream,
+    backend: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    frontend: &mut (impl AsyncRead + AsyncWrite + Unpin),
     sql: &str,
 ) -> Result<(), MssqlError> {
     let payload = SqlBatch::new(sql).encode();
@@ -424,8 +462,8 @@ pub async fn relay_sql_batch(
 /// the same way (session over) — good enough for this milestone, worth
 /// splitting only if a real deployment needs to tell the two apart.
 pub async fn run_proxy_session(
-    frontend: &mut TcpStream,
-    backend: &mut TcpStream,
+    frontend: &mut (impl AsyncRead + AsyncWrite + Unpin),
+    backend: &mut (impl AsyncRead + AsyncWrite + Unpin),
     requested_encryption: EncryptionLevel,
     check_credentials: impl FnOnce(&str, &str) -> bool,
 ) -> Result<(), MssqlError> {
@@ -482,6 +520,8 @@ mod tests {
     //! The `server_*` round-trip test is the exception — pure loopback
     //! against our own listener, no live server or env vars needed, runs
     //! every time.
+
+    use tokio::net::TcpStream;
 
     use super::*;
 
@@ -670,6 +710,48 @@ mod tests {
         client_login7_sql_auth(&mut stream, "sa", &password)
             .await
             .expect("LOGIN7 with valid credentials should succeed");
+    }
+
+    /// TLS-in-TDS, proven against the real container: PreLogin requesting
+    /// encryption (unlike every other live test here, which requests
+    /// `NotSupported` specifically to stay in the clear), then
+    /// `client_upgrade_to_tls`, then LOGIN7 and a query *over the TLS
+    /// stream* using the exact same `client_login7_sql_auth`/
+    /// `client_sql_batch` functions the plaintext tests use — proving the
+    /// generic `impl AsyncRead + AsyncWrite + Unpin` refactor actually pays
+    /// off, not just compiles.
+    #[tokio::test]
+    async fn logs_in_over_tls_against_a_real_sql_server() {
+        if !live_test_enabled() {
+            eprintln!("skipping: set WARPGATE_MSSQL_TEST=1 to run against a live SQL Server");
+            return;
+        }
+        let password = std::env::var("WARPGATE_MSSQL_TEST_SA_PASSWORD")
+            .expect("WARPGATE_MSSQL_TEST_SA_PASSWORD must be set for the login test");
+        let mut stream = connect().await;
+
+        let response = client_prelogin_handshake(&mut stream, EncryptionLevel::Required)
+            .await
+            .expect("PreLogin handshake requesting encryption");
+        assert!(
+            response.encryption.is_required() || response.encryption == EncryptionLevel::On,
+            "expected the server to support encryption, got {:?}",
+            response.encryption
+        );
+
+        let mut tls_stream = client_upgrade_to_tls(stream, "localhost", true)
+            .await
+            .expect("TLS handshake (TDS 7.x, PreLogin-wrapped)");
+
+        client_login7_sql_auth(&mut tls_stream, "sa", &password)
+            .await
+            .expect("LOGIN7 over TLS should succeed");
+
+        let result = client_sql_batch(&mut tls_stream, "SELECT 1 AS n")
+            .await
+            .expect("SELECT 1 over TLS should succeed");
+        assert_eq!(result.column_names, vec!["n".to_string()]);
+        assert_eq!(result.done_row_count, Some(1));
     }
 
     #[tokio::test]

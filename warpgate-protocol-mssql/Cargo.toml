@@ -13,6 +13,7 @@ publish = false
 # once there's a working PreLogin/Login7 server-side handshake to build on.
 [dependencies]
 bytes.workspace = true
+mssql-tls.workspace = true
 thiserror.workspace = true
 tds-protocol.workspace = true
 tokio = { workspace = true, features = ["net"] }
