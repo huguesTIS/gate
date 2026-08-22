@@ -16,7 +16,8 @@
 
 use bytes::{Bytes, BytesMut};
 use tds_protocol::{
-    EncryptionLevel, Login7, PacketHeader, PacketStatus, PacketType, PreLogin, Token, TokenParser,
+    ColMetaData, EncryptionLevel, Login7, PacketHeader, PacketStatus, PacketType, PreLogin,
+    SqlBatch, Token, TokenParser,
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -31,6 +32,24 @@ pub enum MssqlError {
     UnexpectedPacketType(tds_protocol::PacketType, String),
     #[error("login rejected: {0}")]
     LoginRejected(String),
+    #[error("query failed: {0}")]
+    QueryFailed(String),
+}
+
+/// Result of a `SqlBatch`, deliberately shallow: this milestone proves the
+/// `SqlBatch` → `ColMetaData` → `Row`/`NbcRow` → `Done` token sequence
+/// round-trips against a real server, not a full typed row decoder — `RawRow`
+/// only exposes the wire-encoded bytes per row (`tds-protocol` is explicit
+/// that per-type decoding is the caller's job). Typed value extraction is
+/// future work once there's a real proxying architecture to decode *into*.
+#[derive(Debug)]
+pub struct QueryResult {
+    pub column_names: Vec<String>,
+    pub row_count: usize,
+    /// Rows actually affected/returned, per the server's own `DONE` token —
+    /// compared against `row_count` (rows this crate actually saw) as a
+    /// consistency check, not just trusted blindly.
+    pub done_row_count: Option<u64>,
 }
 
 /// Best-effort extraction of a `Token::Error`'s message from an unexpected
@@ -182,6 +201,48 @@ pub async fn client_login7_sql_auth(
     ))
 }
 
+/// Sends `sql` as a `SqlBatch` request and reads the response, counting rows
+/// and collecting column names. **Must** be called after a successful
+/// [`client_login7_sql_auth`] on the same connection.
+pub async fn client_sql_batch(stream: &mut TcpStream, sql: &str) -> Result<QueryResult, MssqlError> {
+    let payload = SqlBatch::new(sql).encode();
+    write_tds_message(stream, PacketType::SqlBatch, &payload).await?;
+
+    let (packet_type, body) = read_tds_message(stream).await?;
+    if packet_type != PacketType::TabularResult {
+        return Err(MssqlError::UnexpectedPacketType(
+            packet_type,
+            "expected a TabularResult SqlBatch response".to_string(),
+        ));
+    }
+
+    let mut parser = TokenParser::new(body);
+    let mut metadata: Option<ColMetaData> = None;
+    let mut column_names = Vec::new();
+    let mut row_count = 0usize;
+    let mut done_row_count = None;
+
+    while let Some(token) = parser.next_token_with_metadata(metadata.as_ref())? {
+        match token {
+            Token::ColMetaData(md) => {
+                column_names = md.columns.iter().map(|c| c.name.clone()).collect();
+                metadata = Some(md);
+            }
+            Token::Row(_) | Token::NbcRow(_) => row_count += 1,
+            Token::Done(done) if done.status.count => done_row_count = Some(done.row_count),
+            Token::Error(err) => {
+                return Err(MssqlError::QueryFailed(format!(
+                    "{} (state {}): {}",
+                    err.number, err.state, err.message
+                )));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(QueryResult { column_names, row_count, done_row_count })
+}
+
 #[cfg(test)]
 mod tests {
     //! Needs a real SQL Server reachable at `WARPGATE_MSSQL_TEST_ADDR` (default
@@ -242,6 +303,32 @@ mod tests {
         client_login7_sql_auth(&mut stream, "sa", &password)
             .await
             .expect("LOGIN7 with valid credentials should succeed");
+    }
+
+    #[tokio::test]
+    async fn runs_a_simple_select_and_reads_the_result_shape() {
+        if !live_test_enabled() {
+            eprintln!("skipping: set WARPGATE_MSSQL_TEST=1 to run against a live SQL Server");
+            return;
+        }
+        let password = std::env::var("WARPGATE_MSSQL_TEST_SA_PASSWORD")
+            .expect("WARPGATE_MSSQL_TEST_SA_PASSWORD must be set for the login test");
+        let mut stream = connect().await;
+
+        client_prelogin_handshake(&mut stream, EncryptionLevel::NotSupported)
+            .await
+            .expect("PreLogin handshake");
+        client_login7_sql_auth(&mut stream, "sa", &password)
+            .await
+            .expect("LOGIN7 with valid credentials should succeed");
+
+        let result = client_sql_batch(&mut stream, "SELECT 1 AS n")
+            .await
+            .expect("SELECT 1 should succeed");
+
+        assert_eq!(result.column_names, vec!["n".to_string()]);
+        assert_eq!(result.row_count, 1);
+        assert_eq!(result.done_row_count, Some(1));
     }
 
     #[tokio::test]
