@@ -240,3 +240,109 @@ pub mod ssh_command {
         run(db, raw_config, username).await
     }
 }
+
+pub mod winrm_powershell {
+    //! MVP connector: run a single templated PowerShell script over WinRM on a
+    //! fixed admin credential — the Windows/AD counterpart to `ssh_command`,
+    //! covering the family of Netwrix-style actions
+    //! (`WARPGATE_VAUBAN_NETWRIX_ANALYSE.md` §08) that need `Add-LocalGroupMember`,
+    //! `Add-ADGroupMember`, etc. See `ARCHITECTURE_TECHNIQUE.md` §07.
+    //!
+    //! Crate: `winrm-rs` (MIT/Apache-2.0, async/Tokio, own `reqwest`-based
+    //! transport) — its `WinrmClient::run_powershell` already handles the full
+    //! shell lifecycle (create/execute/poll/signal/delete) and encodes the
+    //! script as `-EncodedCommand` UTF-16LE base64, so this connector is just
+    //! resolving the stored credential and mapping the result. NTLM only for
+    //! now (the crate's default; Kerberos/CredSSP need extra cargo features
+    //! not enabled here — see `ARCHITECTURE_TECHNIQUE.md` §07, add if a real
+    //! deployment needs them instead of guessing upfront).
+
+    use sea_orm::{DatabaseConnection, EntityTrait};
+    use serde::Deserialize;
+    use warpgate_common::WarpgateError;
+    use warpgate_db_entities::WinrmCredential;
+    use winrm_rs::{AuthMethod, WinrmClient, WinrmConfig, WinrmCredentials};
+
+    #[derive(Debug, Deserialize)]
+    struct Config {
+        winrm_credential_id: uuid::Uuid,
+        /// `{username}` is replaced with the target user's username.
+        script_template: String,
+    }
+
+    async fn resolve(
+        db: &DatabaseConnection,
+        raw_config: &serde_json::Value,
+        username: &str,
+    ) -> Result<(WinrmCredential::Model, String, String), WarpgateError> {
+        let config: Config = serde_json::from_value(raw_config.clone())?;
+        let Some(credential) = WinrmCredential::Entity::find_by_id(config.winrm_credential_id)
+            .one(db)
+            .await?
+        else {
+            return Err(WarpgateError::InconsistentState(format!(
+                "winrm_powershell action refers to unknown WinRM credential {}",
+                config.winrm_credential_id
+            )));
+        };
+        let password = warpgate_common::resolve_stored_secret(&credential.password)
+            .await?
+            .expose_secret()
+            .clone();
+        let script = config.script_template.replace("{username}", username);
+        Ok((credential, password, script))
+    }
+
+    async fn run(
+        db: &DatabaseConnection,
+        raw_config: &serde_json::Value,
+        username: &str,
+    ) -> Result<(), WarpgateError> {
+        let (credential, password, script) = resolve(db, raw_config, username).await?;
+
+        let config = WinrmConfig {
+            port: credential.port as u16,
+            use_tls: credential.use_tls,
+            auth_method: AuthMethod::Ntlm,
+            ..Default::default()
+        };
+        let creds =
+            WinrmCredentials::new(credential.username.clone(), password, credential.domain.clone());
+        let client = WinrmClient::new(config, creds).map_err(|e| {
+            WarpgateError::InconsistentState(format!("WinRM client setup failed: {e}"))
+        })?;
+
+        let output = client
+            .run_powershell(&credential.host, &script)
+            .await
+            .map_err(|e| {
+                WarpgateError::InconsistentState(format!("WinRM PowerShell run failed: {e}"))
+            })?;
+
+        if output.exit_code == 0 {
+            Ok(())
+        } else {
+            Err(WarpgateError::InconsistentState(format!(
+                "PowerShell script exited with status {}: {}",
+                output.exit_code,
+                String::from_utf8_lossy(&output.stderr)
+            )))
+        }
+    }
+
+    pub async fn grant(
+        db: &DatabaseConnection,
+        raw_config: &serde_json::Value,
+        username: &str,
+    ) -> Result<(), WarpgateError> {
+        run(db, raw_config, username).await
+    }
+
+    pub async fn remove(
+        db: &DatabaseConnection,
+        raw_config: &serde_json::Value,
+        username: &str,
+    ) -> Result<(), WarpgateError> {
+        run(db, raw_config, username).await
+    }
+}

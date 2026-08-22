@@ -18,6 +18,7 @@ warpgate-access = { path = "../warpgate-access" }
 warpgate-common = { path = "../warpgate-common" }
 warpgate-db-entities = { path = "../warpgate-db-entities" }
 warpgate-ldap = { path = "../warpgate-ldap" }
+winrm-rs.workspace = true
 
 [dev-dependencies]
 sea-orm = { workspace = true, features = ["sqlx-sqlite"] }

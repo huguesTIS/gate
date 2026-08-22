@@ -21,6 +21,9 @@ pub enum ConnectorType {
     /// Run a single templated shell command over SSH on a fixed admin credential.
     #[sea_orm(string_value = "ssh_command")]
     SshCommand,
+    /// Run a single templated PowerShell script over WinRM on a fixed admin credential.
+    #[sea_orm(string_value = "winrm_powershell")]
+    WinrmPowershell,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Object)]

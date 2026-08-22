@@ -39,3 +39,4 @@ pub mod UserGroup;
 pub mod UserGroupMember;
 pub mod UserLockout;
 pub mod UserRoleAssignment;
+pub mod WinrmCredential;

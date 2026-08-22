@@ -118,6 +118,13 @@ async fn run_connector(
                 connectors::ssh_command::remove(db, &definition.config, username).await
             }
         }
+        ConnectorType::WinrmPowershell => {
+            if is_grant {
+                connectors::winrm_powershell::grant(db, &definition.config, username).await
+            } else {
+                connectors::winrm_powershell::remove(db, &definition.config, username).await
+            }
+        }
     }
 }
 
