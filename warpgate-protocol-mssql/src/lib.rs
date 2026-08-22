@@ -160,6 +160,35 @@ pub async fn client_prelogin_handshake(
     Ok(PreLogin::decode(body.as_ref())?)
 }
 
+/// Reads and decodes a client's PreLogin request. Server-side counterpart to
+/// [`client_prelogin_handshake`]'s outbound half — the first piece of the
+/// *listener* side of the protocol (accepting a connection), as opposed to
+/// every function above, which dials one. `tds-protocol`'s `PreLogin::decode`
+/// is direction-agnostic (used here for the request, above for the response),
+/// so no new wire-format code was needed for this half — unlike LOGIN7 below.
+pub async fn server_read_prelogin(stream: &mut TcpStream) -> Result<PreLogin, MssqlError> {
+    let (packet_type, body) = read_tds_message(stream).await?;
+    if packet_type != PacketType::PreLogin {
+        return Err(MssqlError::UnexpectedPacketType(
+            packet_type,
+            "expected a PreLogin request from the client".to_string(),
+        ));
+    }
+    Ok(PreLogin::decode(body.as_ref())?)
+}
+
+/// Sends `response` as a PreLogin reply to a connecting client. Matches real
+/// SQL Server's wire behavior discovered in [`client_prelogin_handshake`]'s
+/// docs: the response packet is labeled `TabularResult` (0x04), not
+/// `PreLogin` (0x12) — any real client, including this crate's own
+/// `client_prelogin_handshake`, expects that.
+pub async fn server_send_prelogin_response(
+    stream: &mut TcpStream,
+    response: &PreLogin,
+) -> Result<(), MssqlError> {
+    write_tds_message(stream, PacketType::TabularResult, &response.encode()).await
+}
+
 /// Sends a LOGIN7 packet authenticating as `username`/`password` (SQL
 /// authentication, not Windows/Kerberos) and consumes the server's response
 /// looking for a `LOGINACK` token. **Must** be called right after a
@@ -245,17 +274,51 @@ pub async fn client_sql_batch(stream: &mut TcpStream, sql: &str) -> Result<Query
 
 #[cfg(test)]
 mod tests {
-    //! Needs a real SQL Server reachable at `WARPGATE_MSSQL_TEST_ADDR` (default
-    //! `127.0.0.1:14330`, matching the throwaway container this crate was
-    //! developed against — see `ARCHITECTURE_TECHNIQUE.md` §12). Same
-    //! "needs a live server" limitation `ldap_group`'s tests already have —
-    //! not run as part of the default `cross test` sweep, opt in with:
-    //! `WARPGATE_MSSQL_TEST=1 cross test -p warpgate-protocol-mssql`.
+    //! Most tests here need a real SQL Server reachable at
+    //! `WARPGATE_MSSQL_TEST_ADDR` (default `127.0.0.1:14330`, matching the
+    //! throwaway container this crate was developed against — see
+    //! `ARCHITECTURE_TECHNIQUE.md` §12). Same "needs a live server"
+    //! limitation `ldap_group`'s tests already have — not run as part of the
+    //! default `cross test` sweep, opt in with: `WARPGATE_MSSQL_TEST=1 cross
+    //! test -p warpgate-protocol-mssql`.
     //!
     //! `WARPGATE_MSSQL_TEST_SA_PASSWORD` must match the container's
     //! `MSSQL_SA_PASSWORD` for the login tests.
+    //!
+    //! The `server_*` round-trip test is the exception — pure loopback
+    //! against our own listener, no live server or env vars needed, runs
+    //! every time.
 
     use super::*;
+
+    #[tokio::test]
+    async fn server_prelogin_round_trips_with_our_own_client() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind an ephemeral loopback port");
+        let addr = listener.local_addr().expect("listener has a local address");
+
+        let server_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            let client_request = server_read_prelogin(&mut stream)
+                .await
+                .expect("decode client's PreLogin request");
+            assert_eq!(client_request.encryption, EncryptionLevel::NotSupported);
+
+            let response = PreLogin::new().with_encryption(EncryptionLevel::NotSupported);
+            server_send_prelogin_response(&mut stream, &response)
+                .await
+                .expect("send PreLogin response");
+        });
+
+        let mut client_stream = TcpStream::connect(addr).await.expect("connect to our own server");
+        let response = client_prelogin_handshake(&mut client_stream, EncryptionLevel::NotSupported)
+            .await
+            .expect("PreLogin handshake against our own server");
+
+        server_task.await.expect("server task panicked");
+        assert_eq!(response.encryption, EncryptionLevel::NotSupported);
+    }
 
     async fn connect() -> TcpStream {
         let addr = std::env::var("WARPGATE_MSSQL_TEST_ADDR")
