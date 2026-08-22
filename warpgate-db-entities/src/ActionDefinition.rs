@@ -18,6 +18,9 @@ pub enum ConnectorType {
     /// Add/remove the target user's DN to/from an LDAP group's `member` attribute.
     #[sea_orm(string_value = "ldap_group")]
     LdapGroup,
+    /// Run a single templated shell command over SSH on a fixed admin credential.
+    #[sea_orm(string_value = "ssh_command")]
+    SshCommand,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Object)]

@@ -25,6 +25,7 @@ pub mod Recording;
 pub mod Role;
 pub mod Session;
 pub mod SshClientKey;
+pub mod SshCredential;
 pub mod SsoCredential;
 pub mod Target;
 pub mod TargetGroup;

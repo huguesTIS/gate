@@ -111,6 +111,13 @@ async fn run_connector(
                 connectors::ldap_group::remove(db, &definition.config, username).await
             }
         }
+        ConnectorType::SshCommand => {
+            if is_grant {
+                connectors::ssh_command::grant(db, &definition.config, username).await
+            } else {
+                connectors::ssh_command::remove(db, &definition.config, username).await
+            }
+        }
     }
 }
 

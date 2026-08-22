@@ -7,6 +7,7 @@ publish = false
 
 [dependencies]
 ldap3.workspace = true
+russh.workspace = true
 sea-orm.workspace = true
 serde.workspace = true
 serde_json.workspace = true
