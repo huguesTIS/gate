@@ -18,6 +18,7 @@ members = [
     "warpgate-ldap",
     "warpgate-protocol-http",
     "warpgate-protocol-kubernetes",
+    "warpgate-protocol-mssql",
     "warpgate-protocol-mysql",
     "warpgate-protocol-postgres",
     "warpgate-protocol-rdp",
@@ -185,6 +186,10 @@ tokio-tungstenite = { version = "0.30", features = [
 ], default-features = false }
 reqwest-websocket = { version = "0.6.0", default-features = false }
 time = { version = "0.3", default-features = false }
+# Exploratory: MSSQL protocol groundwork, not yet wired into the `warpgate`
+# binary (warpgate-protocol-mssql is a workspace member but no crate depends
+# on it yet) — see ARCHITECTURE_TECHNIQUE.md §07 "MSSQL".
+tds-protocol = { version = "0.20.2", default-features = false, features = ["std"] }
 url = { version = "2.4", default-features = false }
 # NTLM/Basic only for now (no `kerberos`/`credssp` feature) — see the
 # winrm_powershell connector in warpgate-actions.

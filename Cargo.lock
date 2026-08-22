@@ -8079,6 +8079,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
+name = "tds-protocol"
+version = "0.20.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53d292e27bb815636b601439985150784165d39171a9af7e96589cf27539ac6a"
+dependencies = [
+ "bitflags 2.13.1",
+ "bytes",
+ "thiserror 2.0.20",
+]
+
+[[package]]
 name = "tempfile"
 version = "3.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9461,6 +9472,17 @@ dependencies = [
  "warpgate-db-entities",
  "warpgate-sso",
  "warpgate-tls",
+]
+
+[[package]]
+name = "warpgate-protocol-mssql"
+version = "0.28.2"
+dependencies = [
+ "bytes",
+ "tds-protocol",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

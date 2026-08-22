@@ -1,0 +1,22 @@
+[package]
+name = "warpgate-protocol-mssql"
+version = "0.28.2"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+# Exploratory groundwork only — see ARCHITECTURE_TECHNIQUE.md §12 "MSSQL". Not
+# yet a dependency of `warpgate` (the main binary), and deliberately kept free
+# of warpgate-core/warpgate-access so `cargo check -p warpgate-protocol-mssql`
+# stays fast and isolated while the low-level protocol work is iterated on
+# against a real Dockerized SQL Server. Wire it into the workspace binary only
+# once there's a working PreLogin/Login7 server-side handshake to build on.
+[dependencies]
+bytes.workspace = true
+thiserror.workspace = true
+tds-protocol.workspace = true
+tokio = { workspace = true, features = ["net"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["net", "rt", "rt-multi-thread", "macros"] }
