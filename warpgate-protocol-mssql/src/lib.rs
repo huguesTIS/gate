@@ -14,7 +14,10 @@
 //! isolation (no `warpgate-core`/full-binary recompile) while the low-level
 //! handshake is proven out against a real Dockerized SQL Server.
 
+mod login7_decode;
+
 use bytes::{Bytes, BytesMut};
+pub use login7_decode::decode_login7;
 use tds_protocol::{
     ColMetaData, EncryptionLevel, Login7, PacketHeader, PacketStatus, PacketType, PreLogin,
     SqlBatch, Token, TokenParser,
@@ -34,6 +37,8 @@ pub enum MssqlError {
     LoginRejected(String),
     #[error("query failed: {0}")]
     QueryFailed(String),
+    #[error("malformed LOGIN7 packet: {0}")]
+    MalformedLogin7(String),
 }
 
 /// Result of a `SqlBatch`, deliberately shallow: this milestone proves the
@@ -189,6 +194,29 @@ pub async fn server_send_prelogin_response(
     write_tds_message(stream, PacketType::TabularResult, &response.encode()).await
 }
 
+/// Reads and decodes a client's LOGIN7 request — a real gap `tds-protocol`
+/// leaves open (no `Login7::decode()` at all, see [`login7_decode`]'s module
+/// docs for why and how this fills it in by hand against MS-TDS directly).
+///
+/// This only gets the client's credentials off the wire; it does not check
+/// them or send any response. Sending a LOGINACK/Error token back is a
+/// *separate* gap this crate doesn't close yet either — `tds-protocol` has
+/// no encoder for those tokens (only `Done`/`DoneProc`/`DoneInProc` have
+/// both directions; `LoginAck` and `ServerError`/`Token::Error` are
+/// decode-only, the same client-only asymmetry as LOGIN7 but the other way
+/// around). Both gaps get closed together once there's a real credential
+/// check to respond to.
+pub async fn server_read_login7(stream: &mut TcpStream) -> Result<Login7, MssqlError> {
+    let (packet_type, body) = read_tds_message(stream).await?;
+    if packet_type != PacketType::Tds7Login {
+        return Err(MssqlError::UnexpectedPacketType(
+            packet_type,
+            "expected a LOGIN7 request from the client".to_string(),
+        ));
+    }
+    decode_login7(&body)
+}
+
 /// Sends a LOGIN7 packet authenticating as `username`/`password` (SQL
 /// authentication, not Windows/Kerberos) and consumes the server's response
 /// looking for a `LOGINACK` token. **Must** be called right after a
@@ -318,6 +346,43 @@ mod tests {
 
         server_task.await.expect("server task panicked");
         assert_eq!(response.encryption, EncryptionLevel::NotSupported);
+    }
+
+    /// Proves the hand-written `decode_login7` against a real `Login7::encode()`
+    /// output — not our own re-implementation of encoding, `tds-protocol`'s
+    /// actual encoder. No live server or LOGINACK response needed: this only
+    /// tests the request-decoding half (see `server_read_login7`'s docs for
+    /// why the response half is a separate, still-open gap).
+    #[tokio::test]
+    async fn server_login7_decodes_a_real_client_request() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind an ephemeral loopback port");
+        let addr = listener.local_addr().expect("listener has a local address");
+
+        let server_task = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept");
+            server_read_login7(&mut stream).await.expect("decode client's LOGIN7 request")
+        });
+
+        let mut client_stream = TcpStream::connect(addr).await.expect("connect to our own server");
+        let login = Login7::new()
+            .with_hostname("test-host")
+            .with_sql_auth("someuser", "s3cr3t-p@ss")
+            .with_app_name("warpgate-protocol-mssql-test")
+            .with_database("mydb");
+        write_tds_message(&mut client_stream, PacketType::Tds7Login, &login.encode())
+            .await
+            .expect("send LOGIN7");
+
+        let decoded = server_task.await.expect("server task panicked");
+
+        assert_eq!(decoded.hostname, "test-host");
+        assert_eq!(decoded.username, "someuser");
+        assert_eq!(decoded.password, "s3cr3t-p@ss");
+        assert_eq!(decoded.app_name, "warpgate-protocol-mssql-test");
+        assert_eq!(decoded.database, "mydb");
+        assert!(!decoded.option_flags2.integrated_security, "with_sql_auth must clear integrated_security");
     }
 
     async fn connect() -> TcpStream {
