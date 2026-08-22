@@ -21,6 +21,7 @@ use warpgate_core::login_protection::FailedAttemptInfo;
 pub const MAX_OTP_ATTEMPTS: usize = 3;
 
 /// One key event's effect on the OTP field. Protocol code maps its own raw input to this.
+#[derive(Debug)]
 pub enum OtpAction {
     Digit(char),
     Backspace,
