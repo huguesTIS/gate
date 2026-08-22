@@ -82,10 +82,13 @@ impl HoldInputSource for RdpHoldInput<'_> {
                 keysym,
                 scancode,
                 down: true,
-            })) => scancode
-                .and_then(scancode_otp_action)
-                .or_else(|| keysym.and_then(key_otp_action))
-                .map_or(HoldEvent::Other, HoldEvent::Otp),
+            })) => {
+                let action = scancode
+                    .and_then(scancode_otp_action)
+                    .or_else(|| keysym.and_then(key_otp_action));
+                tracing::debug!(?scancode, ?keysym, ?action, "MFA hold screen key event");
+                action.map_or(HoldEvent::Other, HoldEvent::Otp)
+            }
             Some(
                 ServerEvent::Size { width, height } | ServerEvent::ResizeRequest { width, height },
             ) => {
@@ -213,6 +216,10 @@ pub(super) async fn run_credential_screen(
     let mut painter = HoldPainter::new(*screen);
     let mut ticker = tokio::time::interval(HOLD_RENDER_INTERVAL);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Recomputed on resize (`ServerEvent::Size`) — the single source of truth `render_credential`
+    // also draws from, so a click can never land somewhere the button isn't actually drawn.
+    let mut layout = ui::credential_layout(*screen);
+    let mut left_button_down = false;
 
     loop {
         tokio::select! {
@@ -290,6 +297,24 @@ pub(super) async fn run_credential_screen(
                     ServerEvent::Size { width, height } => {
                         *screen = ui::Screen { width, height };
                         painter.set_screen(*screen);
+                        layout = ui::credential_layout(*screen);
+                    }
+                    ServerEvent::Input(DesktopInput::Pointer { x, y, buttons }) => {
+                        let is_left_down = buttons & 1 != 0;
+                        if is_left_down && !left_button_down {
+                            let (px, py) = (i32::from(x), i32::from(y));
+                            if layout.show.contains(px, py) {
+                                revealed = !revealed;
+                            } else if layout.cancel.contains(px, py) {
+                                close_with_message(server_in_tx, screen, "Cancelled.").await;
+                                return Ok(None);
+                            } else if layout.login.contains(px, py)
+                                && apply_credential_action(&mut password, TextFieldAction::Submit)
+                            {
+                                return Ok(Some(password));
+                            }
+                        }
+                        left_button_down = is_left_down;
                     }
                     _ => (),
                 }
@@ -312,6 +337,31 @@ pub(super) async fn run_credential_screen(
             },
         }
     }
+}
+
+/// How long the closing message stays on screen before the connection actually drops —
+/// long enough to read, short enough not to feel like a hang.
+const CLOSING_MESSAGE_DURATION: Duration = Duration::from_secs(3);
+
+/// Show a final message, then end the session. Without this, the viewer's last frame is
+/// whatever the previous screen happened to say (often a stale retry prompt), and the
+/// connection just drops under it — mstsc's own generic disconnect dialog then appears to
+/// stack on top of an unrelated message instead of explaining why the session actually ended.
+/// Best-effort throughout: a viewer that has already gone away just doesn't see it, which is
+/// fine — there's no one to show it to.
+pub(super) async fn close_with_message(
+    server_in_tx: &Sender<ServerInput>,
+    screen: &mut ui::Screen,
+    message: &str,
+) {
+    let mut painter = HoldPainter::new(*screen);
+    let _ = painter
+        .paint(server_in_tx, |screen, tick| {
+            ui::render_closing(screen, tick, message)
+        })
+        .await;
+    tokio::time::sleep(CLOSING_MESSAGE_DURATION).await;
+    let _ = server_in_tx.send(ServerInput::Shutdown).await;
 }
 
 /// Apply one text-field action to the password buffer. Returns `true` once the viewer
@@ -554,9 +604,14 @@ mod credential_screen_tests {
         })
     }
 
+    fn pointer(x: u16, y: u16, buttons: u8) -> ServerEvent {
+        ServerEvent::Input(DesktopInput::Pointer { x, y, buttons })
+    }
+
     const LEFT_SHIFT: u8 = 0x2a;
     const ENTER: u8 = 0x1c;
     const BACKSPACE: u8 = 0x0e;
+    const LEFT_BUTTON: u8 = 1;
 
     /// Spawns `run_credential_screen` against a fresh pair of channels and a generously
     /// buffered `server_in` (frames are painted every 100ms; the test channel just needs to
@@ -610,6 +665,69 @@ mod credential_screen_tests {
             .expect("screen task timed out")
             .expect("screen task panicked");
         assert_eq!(result.unwrap(), Some("Hi!".to_owned()));
+    }
+
+    /// Clicking "Login" is equivalent to pressing Enter — same `Submit` action, just via the
+    /// pointer. Coordinates are computed for `spawn_screen`'s 800x600 test screen from
+    /// `ui::credential_layout`'s formulas: cx=400, field_y=484, login rect x0..x1=252..392,
+    /// y0..y1=544..584 — (300, 560) sits inside it.
+    #[tokio::test]
+    async fn clicking_login_submits_like_enter() {
+        let (events_tx, handle) = spawn_screen();
+        for event in [
+            key(0x1e, true), // a
+            key(0x1e, false),
+            pointer(300, 560, LEFT_BUTTON), // press inside the Login button
+        ] {
+            events_tx.send(event).expect("screen task still running");
+        }
+
+        let result = timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("screen task timed out")
+            .expect("screen task panicked");
+        assert_eq!(result.unwrap(), Some("a".to_owned()));
+    }
+
+    /// Clicking "Cancel" ends the screen with `None`, same as a disconnect — but only after
+    /// `close_with_message` paints a closing frame and holds it for
+    /// `CLOSING_MESSAGE_DURATION`, hence the generous timeout. Coordinates: cancel rect
+    /// x0..x1=408..548, y0..y1=544..584 — (450, 560) sits inside it.
+    #[tokio::test]
+    async fn clicking_cancel_ends_the_screen_with_none() {
+        let (events_tx, handle) = spawn_screen();
+        events_tx
+            .send(pointer(450, 560, LEFT_BUTTON))
+            .expect("screen task still running");
+
+        let result = timeout(CLOSING_MESSAGE_DURATION + Duration::from_secs(2), handle)
+            .await
+            .expect("screen task timed out")
+            .expect("screen task panicked");
+        assert_eq!(result.unwrap(), None);
+    }
+
+    /// Clicking "Show" toggles plaintext reveal — same effect as F1, just via the pointer; not
+    /// directly observable from `run_credential_screen`'s return value, so this only checks
+    /// that a click there does *not* submit or cancel the screen (a wrong hit-test would).
+    /// Coordinates: show rect x0..x1=509..579, y0..y1=484..524 — (540, 500) sits inside it.
+    #[tokio::test]
+    async fn clicking_show_does_not_submit_or_cancel() {
+        let (events_tx, handle) = spawn_screen();
+        for event in [
+            key(0x1e, true), // a
+            key(0x1e, false),
+            pointer(540, 500, LEFT_BUTTON), // press inside the Show button
+            key(ENTER, true),
+        ] {
+            events_tx.send(event).expect("screen task still running");
+        }
+
+        let result = timeout(Duration::from_secs(2), handle)
+            .await
+            .expect("screen task timed out")
+            .expect("screen task panicked");
+        assert_eq!(result.unwrap(), Some("a".to_owned()));
     }
 
     #[tokio::test]

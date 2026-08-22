@@ -49,7 +49,7 @@ mod protocol;
 mod rdp;
 
 use bridge::{DialError, connect_backend};
-use hold_screen::{run_banner_screen, run_credential_screen, run_hold_screen};
+use hold_screen::{close_with_message, run_banner_screen, run_credential_screen, run_hold_screen};
 use protocol::{AuthVerdict, Event as ServerEvent, Input as ServerInput};
 use warpgate_desktop_auth::{
     DesktopAuthOutcome, DesktopProtocol, authenticate, finalize_user_auth,
@@ -352,19 +352,34 @@ async fn control_loop(
                                     }
                                     Err(error) => {
                                         warn!(%error, "Authorization failed after second factor");
-                                        let _ = server_in_tx.send(ServerInput::Shutdown).await;
+                                        close_with_message(
+                                            &server_in_tx,
+                                            &mut screen,
+                                            "Access denied after verification. Closing this session.",
+                                        )
+                                        .await;
                                         break;
                                     }
                                 }
                             }
                             Ok(None) => {
                                 warn!("Interactive authentication failed");
-                                let _ = server_in_tx.send(ServerInput::Shutdown).await;
+                                close_with_message(
+                                    &server_in_tx,
+                                    &mut screen,
+                                    "Authentication failed. Closing this session.",
+                                )
+                                .await;
                                 break;
                             }
                             Err(error) => {
                                 warn!(%error, "Holding-screen error");
-                                let _ = server_in_tx.send(ServerInput::Shutdown).await;
+                                close_with_message(
+                                    &server_in_tx,
+                                    &mut screen,
+                                    "An internal error occurred. Closing this session.",
+                                )
+                                .await;
                                 break;
                             }
                         }
@@ -574,7 +589,12 @@ async fn dial_if_pending(
             }
             Err(DialError::Rejected(message)) => {
                 warn!(%message, "RDP target rejected the connection; giving up");
-                let _ = server_in_tx.send(ServerInput::Shutdown).await;
+                close_with_message(
+                    server_in_tx,
+                    screen,
+                    &format!("Connection rejected: {message}\n\nClosing this session."),
+                )
+                .await;
                 return Ok(());
             }
             Err(DialError::Fatal(error)) => return Err(error),

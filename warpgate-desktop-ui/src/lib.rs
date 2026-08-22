@@ -46,7 +46,7 @@ const BG: Rgb888 = Rgb888::new(0x14, 0x14, 0x1a);
 const FG: Rgb888 = Rgb888::new(0xc1, 0xc9, 0xe4);
 
 pub fn render_connecting(screen: Screen, tick: u64) -> Result<Vec<u8>, Infallible> {
-    render(screen, tick, "Connecting", None, BallPosition::AboveText)
+    render(screen, tick, "Connecting", None)
 }
 
 /// The login banner, shown until the viewer acknowledges it with any key or click.
@@ -56,8 +56,202 @@ pub fn render_banner(screen: Screen, tick: u64, banner: &str) -> Result<Vec<u8>,
         tick,
         &format!("{banner}\n\nPress any key to continue"),
         None,
-        BallPosition::AboveText,
     )
+}
+
+/// A final message shown briefly before the session ends (too many failed attempts, an
+/// internal error, ...). Without this, the viewer's last frame is whatever the previous screen
+/// happened to say — often a stale retry prompt — and the connection just drops under it, so
+/// mstsc's own generic disconnect dialog appears to stack on top of an unrelated message
+/// instead of explaining why the session actually ended.
+pub fn render_closing(screen: Screen, tick: u64, message: &str) -> Result<Vec<u8>, Infallible> {
+    let cleaned = strip_source_annotations(message);
+    let max_chars = usize::from(screen.width / 10).saturating_sub(6).max(20);
+    render(screen, tick, &wrap_text(&cleaned, max_chars), None)
+}
+
+/// An axis-aligned pixel rectangle, half-open (`x1`/`y1` excluded) — matches how
+/// [`credential_layout`] hands out click regions and how a pointer event's `(x, y)` is
+/// hit-tested against them.
+#[derive(Clone, Copy, Debug)]
+pub struct ClickRect {
+    pub x0: i32,
+    pub y0: i32,
+    pub x1: i32,
+    pub y1: i32,
+}
+
+impl ClickRect {
+    #[must_use]
+    pub const fn contains(&self, x: i32, y: i32) -> bool {
+        x >= self.x0 && x < self.x1 && y >= self.y0 && y < self.y1
+    }
+}
+
+/// The credential screen's clickable regions, in the same pixel space as the viewer's pointer
+/// events. [`credential_layout`] is the single source of truth both [`render_credential`] (to
+/// draw them) and the caller (to hit-test clicks) consult, so the two can never drift apart.
+#[derive(Clone, Copy, Debug)]
+pub struct CredentialButtons {
+    pub show: ClickRect,
+    pub login: ClickRect,
+    pub cancel: ClickRect,
+}
+
+const FIELD_BOX_W: i32 = 280;
+const SHOW_BUTTON_W: i32 = 70;
+const BUTTON_GAP: i32 = 8;
+const FIELD_ROW_H: i32 = 40;
+const LOGIN_BUTTON_W: i32 = 140;
+const CANCEL_BUTTON_W: i32 = 140;
+const BUTTON_ROW_GAP: i32 = 16;
+const LINE_H: i32 = 26;
+/// Lines reserved for the (possibly wrapped) error message, regardless of its actual length —
+/// keeps the field and buttons at a fixed position instead of shifting with error length, which
+/// is what let [`credential_layout`] be a pure function of `screen` alone.
+const ERROR_LINES: i32 = 3;
+
+/// Pure geometry for the credential screen — no drawing, just where things go. Fixed relative
+/// to `screen` alone (a reserved-height block absorbs the error text instead of reflowing
+/// everything below it), so a click can be hit-tested without re-deriving whatever the last
+/// frame's error text happened to be.
+#[must_use]
+pub fn credential_layout(screen: Screen) -> CredentialButtons {
+    let (w, h) = (i32::from(screen.width), i32::from(screen.height));
+    let cx = w / 2;
+    let cy = h / 2 - 24;
+
+    let field_y = cy + 88 + LINE_H + LINE_H * ERROR_LINES + 16;
+    let field_row_w = FIELD_BOX_W + BUTTON_GAP + SHOW_BUTTON_W;
+    let field_x0 = cx - field_row_w / 2;
+    let show_x0 = field_x0 + FIELD_BOX_W + BUTTON_GAP;
+    let show = ClickRect {
+        x0: show_x0,
+        y0: field_y,
+        x1: show_x0 + SHOW_BUTTON_W,
+        y1: field_y + FIELD_ROW_H,
+    };
+
+    let button_y = field_y + FIELD_ROW_H + 20;
+    let button_row_w = LOGIN_BUTTON_W + BUTTON_ROW_GAP + CANCEL_BUTTON_W;
+    let login_x0 = cx - button_row_w / 2;
+    let cancel_x0 = login_x0 + LOGIN_BUTTON_W + BUTTON_ROW_GAP;
+    let login = ClickRect {
+        x0: login_x0,
+        y0: button_y,
+        x1: login_x0 + LOGIN_BUTTON_W,
+        y1: button_y + FIELD_ROW_H,
+    };
+    let cancel = ClickRect {
+        x0: cancel_x0,
+        y0: button_y,
+        x1: cancel_x0 + CANCEL_BUTTON_W,
+        y1: button_y + FIELD_ROW_H,
+    };
+
+    CredentialButtons {
+        show,
+        login,
+        cancel,
+    }
+}
+
+/// Renders the Requester credential prompt: username, a fixed-height reserved error block,
+/// the password field with an inline "Show"/"Hide" button, and a Login/Cancel button row —
+/// laid out by [`credential_layout`], which callers use to hit-test pointer clicks against the
+/// same regions drawn here.
+pub fn render_credential(
+    screen: Screen,
+    tick: u64,
+    username: &str,
+    password: &str,
+    revealed: bool,
+    error: Option<&str>,
+) -> Result<Vec<u8>, Infallible> {
+    let (w, h) = (i32::from(screen.width), i32::from(screen.height));
+    let mut fb = Framebuffer::new(u32::from(screen.width), u32::from(screen.height), BG);
+    let cx = w / 2;
+    let cy = h / 2 - 24;
+
+    let image = logo();
+    let x0 = (w - image.size().width.cast_signed()) / 2;
+    let logo_y = LOGO_Y
+        .min(cy - image.size().height.cast_signed() - LOGO_GAP)
+        .max(0);
+    Image::new(image, Point::new(x0, logo_y)).draw(&mut fb)?;
+
+    let style = MonoTextStyle::new(&FONT_10X20, FG);
+    Text::with_alignment(
+        username,
+        Point::new(cx, cy + 88),
+        style,
+        Alignment::Center,
+    )
+    .draw(&mut fb)?;
+
+    if let Some(error) = error {
+        let cleaned = strip_source_annotations(error);
+        let max_chars = usize::from(screen.width / 10).saturating_sub(6).max(20);
+        let wrapped = wrap_text(&cleaned, max_chars);
+        #[allow(clippy::cast_sign_loss)]
+        for (i, line) in wrapped.lines().take(ERROR_LINES as usize).enumerate() {
+            #[allow(clippy::cast_possible_wrap)]
+            let y = cy + 88 + LINE_H + (i as i32) * LINE_H;
+            Text::with_alignment(line, Point::new(cx, y), style, Alignment::Center).draw(&mut fb)?;
+        }
+    }
+
+    let layout = credential_layout(screen);
+
+    // Password field — same masked/blinking-cursor content as before, drawn narrower now that
+    // the "Show" button sits beside it instead of being keyboard-only.
+    let content = if revealed {
+        password.to_owned()
+    } else {
+        "*".repeat(password.chars().count())
+    };
+    let field_content = if tick % 10 < 5 {
+        format!("{content}_")
+    } else {
+        content
+    };
+    draw_field_box(
+        &mut fb,
+        layout.show.x0 - BUTTON_GAP - FIELD_BOX_W,
+        layout.show.y0,
+        FIELD_BOX_W,
+        &field_content,
+        style,
+    );
+
+    draw_button(&mut fb, layout.show, if revealed { "Hide" } else { "Show" });
+    draw_button(&mut fb, layout.login, "Login");
+    draw_button(&mut fb, layout.cancel, "Cancel");
+
+    let ball_y = layout.login.y1 + 30;
+    bouncy_ball::bouncy_ball(tick, cx, ball_y)
+        .into_styled(PrimitiveStyle::with_fill(FG))
+        .draw(&mut fb)?;
+
+    Ok(fb.take_pixels())
+}
+
+/// Draw one rectangular button: a filled `FG` box (so it reads as "pressable" the way the
+/// stroke-only password field reads as "typeable"), with its label in `BG` for contrast — the
+/// same fill/text-color inversion `draw_char_boxes` already uses for the OTP slots.
+fn draw_button(fb: &mut Framebuffer, rect: ClickRect, label: &str) {
+    let w = u32::try_from(rect.x1 - rect.x0).unwrap_or(0);
+    let h = u32::try_from(rect.y1 - rect.y0).unwrap_or(0);
+    let _ = RoundedRectangle::new(
+        Rectangle::new(Point::new(rect.x0, rect.y0), Size::new(w, h)),
+        CornerRadii::new(Size::new_equal(4)),
+    )
+    .into_styled(PrimitiveStyle::with_fill(FG))
+    .draw(fb);
+    let style = MonoTextStyle::new(&FONT_10X20, BG);
+    let cx = (rect.x0 + rect.x1) / 2;
+    let cy = (rect.y0 + rect.y1) / 2 + 6;
+    let _ = Text::with_alignment(label, Point::new(cx, cy), style, Alignment::Center).draw(fb);
 }
 
 pub enum AuthPrompt {
@@ -107,13 +301,7 @@ pub fn render_authentication(
                 slots: security_key.chars().count(),
             };
             text.push_str("\n\nSecurity key:");
-            render(
-                screen,
-                tick,
-                &text,
-                Some(Decoration::Chars(boxes)),
-                BallPosition::AboveText,
-            )
+            render(screen, tick, &text, Some(Decoration::Chars(boxes)))
         }
         AuthPrompt::Otp { entered } => render(
             screen,
@@ -123,60 +311,21 @@ pub fn render_authentication(
                 text: entered,
                 slots: OTP_DIGITS,
             })),
-            BallPosition::AboveText,
         ),
         AuthPrompt::Credential {
             username,
             password,
             revealed,
             error,
-        } => {
-            let hint = if *revealed {
-                "Press Enter to connect (F1 to hide)"
-            } else {
-                "Press Enter to connect (F1 to show)"
-            };
-            let mut text = format!("{username}\n\n{hint}");
-            if let Some(error) = error {
-                let cleaned = strip_source_annotations(error);
-                let max_chars = usize::from(screen.width / 10).saturating_sub(6).max(20);
-                let _ = write!(text, "\n\n{}", wrap_text(&cleaned, max_chars));
-            }
-            // `FONT_10X20` is ASCII-only (no bullet glyph) — a non-ASCII mask character
-            // renders as a literal `?` box instead of masking anything.
-            let content = if *revealed {
-                password.clone()
-            } else {
-                "*".repeat(password.chars().count())
-            };
-            // Blinks rather than always showing — a permanently-drawn cursor on an otherwise
-            // empty field reads as a stray leftover character someone has to delete before
-            // typing, not an empty field waiting for input.
-            let field = if tick % 10 < 5 {
-                format!("{content}_")
-            } else {
-                content
-            };
-            render(
-                screen,
-                tick,
-                &text,
-                Some(Decoration::Field(&field)),
-                BallPosition::BelowText,
-            )
-        }
+        } => render_credential(
+            screen,
+            tick,
+            username,
+            password,
+            *revealed,
+            error.as_deref(),
+        ),
     }
-}
-
-/// Where [`render`] draws the bouncy-ball spinner relative to the prompt text: above it (the
-/// default, between the logo and the message — fine for short, fixed-length prompts) or below
-/// it (for prompts whose length varies, like [`AuthPrompt::Credential`] with an error shown —
-/// keeping the ball above would put it between the logo and a growing block of text instead of
-/// acting as a stable "still working" indicator under the input).
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum BallPosition {
-    AboveText,
-    BelowText,
 }
 
 /// Strips `[label @ file.rs:NN]` source-location annotations — emitted by ironrdp's
@@ -232,18 +381,11 @@ struct CharBoxes<'a> {
     slots: usize,
 }
 
-/// What [`render`] draws under the prompt text, if anything: either a row of small per-slot
-/// boxes (OTP digits, the security key) or a single bordered field (the Requester credential
-/// screen's password — unbounded length, so one box showing a scrolling tail suits it better
-/// than one slot per character).
+/// What [`render`] draws under the prompt text, if anything: a row of small per-slot boxes
+/// (OTP digits, the security key).
 enum Decoration<'a> {
     Chars(CharBoxes<'a>),
-    Field(&'a str),
 }
-
-/// Height in pixels of either decoration kind, used to keep the spinner clear of it when drawn
-/// below the text (`BallPosition::BelowText`).
-const DECORATION_H: i32 = 40;
 
 /// Vertical gap kept between the logo and the ball once the screen is too short for
 /// [`LOGO_Y`], below which the logo is pinned to the top edge.
@@ -256,7 +398,6 @@ fn render(
     tick: u64,
     text: &str,
     decoration: Option<Decoration>,
-    ball_position: BallPosition,
 ) -> Result<Vec<u8>, Infallible> {
     let (w, h) = (i32::from(screen.width), i32::from(screen.height));
     let mut fb = Framebuffer::new(u32::from(screen.width), u32::from(screen.height), BG);
@@ -272,15 +413,9 @@ fn render(
         .max(0);
     Image::new(image, Point::new(x0, logo_y)).draw(&mut fb)?;
 
-    let draw_ball = |fb: &mut Framebuffer, y: i32| {
-        bouncy_ball::bouncy_ball(tick, cx, y)
-            .into_styled(PrimitiveStyle::with_fill(FG))
-            .draw(fb)
-    };
-
-    if ball_position == BallPosition::AboveText {
-        draw_ball(&mut fb, cy)?;
-    }
+    bouncy_ball::bouncy_ball(tick, cx, cy)
+        .into_styled(PrimitiveStyle::with_fill(FG))
+        .draw(&mut fb)?;
 
     let style = MonoTextStyle::new(&FONT_10X20, FG);
     let mut y = cy + 88;
@@ -289,26 +424,9 @@ fn render(
         y += 26;
     }
 
-    let has_decoration = decoration.is_some();
-    match decoration {
-        Some(Decoration::Chars(boxes)) => {
-            let box_style = MonoTextStyle::new(&FONT_10X20, BG);
-            draw_char_boxes(&mut fb, cx, y + 8, boxes.text, boxes.slots, box_style);
-        }
-        Some(Decoration::Field(content)) => {
-            let field_style = MonoTextStyle::new(&FONT_10X20, FG);
-            draw_field_box(&mut fb, cx, y + 8, content, field_style);
-        }
-        None => {}
-    }
-
-    if ball_position == BallPosition::BelowText {
-        let ball_y = if has_decoration {
-            y + 8 + DECORATION_H + 20
-        } else {
-            y + 30
-        };
-        draw_ball(&mut fb, ball_y)?;
+    if let Some(Decoration::Chars(boxes)) = decoration {
+        let box_style = MonoTextStyle::new(&FONT_10X20, BG);
+        draw_char_boxes(&mut fb, cx, y + 8, boxes.text, boxes.slots, box_style);
     }
 
     Ok(fb.take_pixels())
@@ -358,36 +476,34 @@ mod char_boxes {
         }
     }
 
-    const FIELD_BOX_W: i32 = 360;
     const FIELD_BOX_H: i32 = 40;
     const FIELD_PAD_X: i32 = 12;
 
-    /// Draw a single bordered field box — an input-style highlight so the credential screen's
-    /// password isn't just floating text — showing the tail of `content` that fits (like a
-    /// real password field, typing past the visible width scrolls instead of overflowing).
+    /// Draw a single bordered field box at `x0`/`y`, `width` wide — an input-style highlight so
+    /// the credential screen's password isn't just floating text — showing the tail of
+    /// `content` that fits (like a real password field, typing past the visible width scrolls
+    /// instead of overflowing).
     pub fn draw_field_box(
         fb: &mut Framebuffer,
-        cx: i32,
+        x0: i32,
         y: i32,
+        width: i32,
         content: &str,
         style: MonoTextStyle<'_, Rgb888>,
     ) {
-        let rect = Rectangle::new(
-            Point::new(cx - FIELD_BOX_W / 2, y),
-            Size::new(FIELD_BOX_W as u32, FIELD_BOX_H as u32),
-        );
+        let rect = Rectangle::new(Point::new(x0, y), Size::new(width as u32, FIELD_BOX_H as u32));
         let _ = RoundedRectangle::new(rect, CornerRadii::new(Size::new_equal(4)))
             .into_styled(PrimitiveStyle::with_stroke(FG, 2))
             .draw(fb);
 
         // FONT_10X20 glyphs are 10px wide; leave padding on both sides of the box.
-        let max_chars = usize::try_from((FIELD_BOX_W - FIELD_PAD_X * 2) / 10).unwrap_or(0);
+        let max_chars = usize::try_from((width - FIELD_PAD_X * 2) / 10).unwrap_or(0);
         let visible_start = content.chars().count().saturating_sub(max_chars);
         let visible: String = content.chars().skip(visible_start).collect();
 
         let _ = Text::with_alignment(
             &visible,
-            Point::new(cx - FIELD_BOX_W / 2 + FIELD_PAD_X, y + FIELD_BOX_H / 2 + 6),
+            Point::new(x0 + FIELD_PAD_X, y + FIELD_BOX_H / 2 + 6),
             style,
             Alignment::Left,
         )
