@@ -41,6 +41,8 @@ pub enum MssqlError {
     QueryFailed(String),
     #[error("malformed LOGIN7 packet: {0}")]
     MalformedLogin7(String),
+    #[error("malformed SqlBatch packet: {0}")]
+    MalformedSqlBatch(String),
 }
 
 /// Result of a `SqlBatch`, deliberately shallow: this milestone proves the
@@ -325,6 +327,75 @@ pub async fn client_sql_batch(stream: &mut TcpStream, sql: &str) -> Result<Query
     Ok(QueryResult { column_names, row_count, done_row_count })
 }
 
+/// Decodes a `SqlBatch` request body — another gap `tds-protocol` leaves
+/// open (`SqlBatch` only has `encode()`, same client-only asymmetry as
+/// LOGIN7 and the LOGINACK/Error tokens, but simpler to fill: no offset
+/// table, just a fixed 22-byte `ALL_HEADERS` prefix (verified against
+/// `sealed::encode_sql_batch_with_transaction`'s source and its own golden-
+/// byte test) followed by the SQL text as raw UTF-16LE running to the end of
+/// the packet — no length prefix needed since packet framing already gives
+/// the total length.
+fn decode_sql_batch(data: &[u8]) -> Result<String, MssqlError> {
+    const ALL_HEADERS_SIZE: usize = 22;
+    let Some(sql_bytes) = data.get(ALL_HEADERS_SIZE..) else {
+        return Err(MssqlError::MalformedSqlBatch(format!(
+            "SqlBatch payload is {} bytes, need at least the {ALL_HEADERS_SIZE}-byte ALL_HEADERS prefix",
+            data.len()
+        )));
+    };
+    if sql_bytes.len() % 2 != 0 {
+        return Err(MssqlError::MalformedSqlBatch(
+            "SQL text is not a whole number of UTF-16LE code units".to_string(),
+        ));
+    }
+    let units: Vec<u16> =
+        sql_bytes.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    Ok(String::from_utf16_lossy(&units))
+}
+
+/// Reads and decodes a client's `SqlBatch` request, returning the SQL text.
+pub async fn server_read_sql_batch(stream: &mut TcpStream) -> Result<String, MssqlError> {
+    let (packet_type, body) = read_tds_message(stream).await?;
+    if packet_type != PacketType::SqlBatch {
+        return Err(MssqlError::UnexpectedPacketType(
+            packet_type,
+            "expected a SqlBatch request from the client".to_string(),
+        ));
+    }
+    decode_sql_batch(&body)
+}
+
+/// Runs `sql` against `backend` (an already-authenticated TDS connection to
+/// a real target, e.g. via [`client_prelogin_handshake`] +
+/// [`client_login7_sql_auth`]) and relays the backend's response bytes
+/// straight through to `frontend` as a `TabularResult` packet.
+///
+/// This is the actual proxying mechanism: no `ColMetaData`/`Row` *encoder*
+/// is needed (a much bigger gap than LOGIN7's — real per-column-type
+/// encoding, not a fixed-size header) because a proxy never needs to
+/// understand a result set's contents, only forward it byte for byte. Every
+/// real client, including this crate's own [`client_sql_batch`], parses the
+/// relayed bytes exactly as if they came straight from the backend, because
+/// they did.
+pub async fn relay_sql_batch(
+    backend: &mut TcpStream,
+    frontend: &mut TcpStream,
+    sql: &str,
+) -> Result<(), MssqlError> {
+    let payload = SqlBatch::new(sql).encode();
+    write_tds_message(backend, PacketType::SqlBatch, &payload).await?;
+
+    let (packet_type, body) = read_tds_message(backend).await?;
+    if packet_type != PacketType::TabularResult {
+        return Err(MssqlError::UnexpectedPacketType(
+            packet_type,
+            "expected a TabularResult SqlBatch response from the backend".to_string(),
+        ));
+    }
+
+    write_tds_message(frontend, PacketType::TabularResult, &body).await
+}
+
 #[cfg(test)]
 mod tests {
     //! Most tests here need a real SQL Server reachable at
@@ -551,6 +622,72 @@ mod tests {
         let result = client_sql_batch(&mut stream, "SELECT 1 AS n")
             .await
             .expect("SELECT 1 should succeed");
+
+        assert_eq!(result.column_names, vec!["n".to_string()]);
+        assert_eq!(result.row_count, 1);
+        assert_eq!(result.done_row_count, Some(1));
+    }
+
+    /// The actual proxy round trip, for the first time: a test client talks
+    /// only to our own server; our server is the only one that talks to the
+    /// real SQL Server container. `client_sql_batch` — the exact same
+    /// function `runs_a_simple_select_and_reads_the_result_shape` uses
+    /// directly against the real container above — is reused here unchanged
+    /// against our server, and parses the relayed bytes exactly the same
+    /// way, because `relay_sql_batch` forwards them byte for byte.
+    #[tokio::test]
+    async fn proxies_a_real_query_from_a_test_client_through_our_server() {
+        if !live_test_enabled() {
+            eprintln!("skipping: set WARPGATE_MSSQL_TEST=1 to run against a live SQL Server");
+            return;
+        }
+        let password = std::env::var("WARPGATE_MSSQL_TEST_SA_PASSWORD")
+            .expect("WARPGATE_MSSQL_TEST_SA_PASSWORD must be set for the login test");
+
+        let mut backend = connect().await;
+        client_prelogin_handshake(&mut backend, EncryptionLevel::NotSupported)
+            .await
+            .expect("PreLogin handshake with the real backend");
+        client_login7_sql_auth(&mut backend, "sa", &password)
+            .await
+            .expect("LOGIN7 with the real backend should succeed");
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind an ephemeral loopback port");
+        let addr = listener.local_addr().expect("listener has a local address");
+
+        let server_task = tokio::spawn(async move {
+            let (mut frontend, _) = listener.accept().await.expect("accept");
+            server_read_prelogin(&mut frontend).await.expect("decode PreLogin");
+            server_send_prelogin_response(
+                &mut frontend,
+                &PreLogin::new().with_encryption(EncryptionLevel::NotSupported),
+            )
+            .await
+            .expect("send PreLogin response");
+            let authenticated = server_authenticate_sql(&mut frontend, "proxyuser", "proxypass")
+                .await
+                .expect("authenticate");
+            assert!(authenticated, "proxy-side credential check should accept its own test credentials");
+
+            let sql = server_read_sql_batch(&mut frontend).await.expect("decode SqlBatch");
+            relay_sql_batch(&mut backend, &mut frontend, &sql).await.expect("relay to the real backend");
+        });
+
+        let mut client_stream = TcpStream::connect(addr).await.expect("connect to our proxy");
+        client_prelogin_handshake(&mut client_stream, EncryptionLevel::NotSupported)
+            .await
+            .expect("PreLogin handshake with our proxy");
+        client_login7_sql_auth(&mut client_stream, "proxyuser", "proxypass")
+            .await
+            .expect("LOGIN7 with our proxy should succeed");
+
+        let result = client_sql_batch(&mut client_stream, "SELECT 1 AS n")
+            .await
+            .expect("SELECT 1 relayed through our proxy should succeed");
+
+        server_task.await.expect("server task panicked");
 
         assert_eq!(result.column_names, vec!["n".to_string()]);
         assert_eq!(result.row_count, 1);
