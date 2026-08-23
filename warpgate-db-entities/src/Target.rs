@@ -17,6 +17,8 @@ pub enum TargetKind {
     Ssh,
     #[sea_orm(string_value = "postgres")]
     Postgres,
+    #[sea_orm(string_value = "mssql")]
+    Mssql,
     #[sea_orm(string_value = "vnc")]
     Vnc,
     #[sea_orm(string_value = "rdp")]
@@ -30,6 +32,7 @@ impl From<&TargetOptions> for TargetKind {
             TargetOptions::Kubernetes(_) => Self::Kubernetes,
             TargetOptions::MySql(_) => Self::MySql,
             TargetOptions::Postgres(_) => Self::Postgres,
+            TargetOptions::Mssql(_) => Self::Mssql,
             TargetOptions::Ssh(_) => Self::Ssh,
             TargetOptions::Vnc(_) => Self::Vnc,
             TargetOptions::Rdp(_) => Self::Rdp,

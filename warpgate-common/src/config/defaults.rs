@@ -23,6 +23,10 @@ pub const fn _default_postgres_port() -> u16 {
     5432
 }
 
+pub const fn _default_mssql_port() -> u16 {
+    1433
+}
+
 pub const fn _default_vnc_port() -> u16 {
     5900
 }
@@ -71,6 +75,11 @@ pub fn _default_mysql_advertised_version() -> String {
 #[inline]
 pub fn _default_postgres_listen() -> ListenEndpoint {
     ListenEndpoint::from(SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 55432))
+}
+
+#[inline]
+pub fn _default_mssql_listen() -> ListenEndpoint {
+    ListenEndpoint::from(SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), 11433))
 }
 
 #[inline]

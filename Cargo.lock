@@ -9049,6 +9049,7 @@ dependencies = [
  "warpgate-db-entities",
  "warpgate-protocol-http",
  "warpgate-protocol-kubernetes",
+ "warpgate-protocol-mssql",
  "warpgate-protocol-mysql",
  "warpgate-protocol-postgres",
  "warpgate-protocol-rdp",
@@ -9494,7 +9495,9 @@ dependencies = [
 name = "warpgate-protocol-mssql"
 version = "0.28.2"
 dependencies = [
+ "anyhow",
  "bytes",
+ "futures",
  "mssql-tls",
  "rcgen",
  "rustls 0.23.43",
@@ -9504,6 +9507,12 @@ dependencies = [
  "tokio-rustls 0.26.4",
  "tracing",
  "tracing-subscriber",
+ "url",
+ "uuid",
+ "warpgate-common",
+ "warpgate-common-http",
+ "warpgate-core",
+ "warpgate-tls",
 ]
 
 [[package]]

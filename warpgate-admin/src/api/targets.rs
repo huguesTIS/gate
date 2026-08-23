@@ -24,6 +24,7 @@ async fn serialize_options_for_storage(
     match &mut options {
         TargetOptions::MySql(opts) => opts.normalize(),
         TargetOptions::Postgres(opts) => opts.normalize(),
+        TargetOptions::Mssql(opts) => opts.normalize(),
         _ => {}
     }
 

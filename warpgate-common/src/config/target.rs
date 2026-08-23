@@ -6,7 +6,7 @@ use uuid::Uuid;
 use warpgate_tls::TlsMode;
 
 use super::defaults::{
-    _default_empty_string, _default_empty_vec, _default_mysql_port,
+    _default_empty_string, _default_empty_vec, _default_mssql_port, _default_mysql_port,
     _default_postgres_idle_timeout_str, _default_postgres_port, _default_rdp_port,
     _default_ssh_port, _default_username, _default_vnc_port,
 };
@@ -277,6 +277,36 @@ impl TargetPostgresOptions {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Object)]
+pub struct TargetMssqlOptions {
+    #[serde(default = "_default_empty_string")]
+    pub host: String,
+
+    #[serde(default = "_default_mssql_port")]
+    pub port: u16,
+
+    #[serde(default = "_default_username")]
+    pub username: String,
+
+    #[serde(default)]
+    auth: Option<DatabaseTargetAuth>,
+
+    #[serde(default)]
+    pub tls: Tls,
+}
+
+impl TargetMssqlOptions {
+    pub fn effective_auth(&self) -> DatabaseTargetAuth {
+        self.auth.clone().unwrap_or_default()
+    }
+
+    pub fn normalize(&mut self) {
+        if self.auth.is_none() {
+            self.auth = Some(DatabaseTargetAuth::default());
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Object)]
 pub struct TargetVncOptions {
     #[serde(default = "_default_empty_string")]
     pub host: String,
@@ -467,6 +497,8 @@ pub enum TargetOptions {
     MySql(TargetMySqlOptions),
     #[serde(rename = "postgres")]
     Postgres(TargetPostgresOptions),
+    #[serde(rename = "mssql")]
+    Mssql(TargetMssqlOptions),
     #[serde(rename = "vnc")]
     Vnc(TargetVncOptions),
     #[serde(rename = "rdp")]
@@ -481,6 +513,7 @@ const SECRET_PATHS: &[&[&str]] = &[
     &["mysql", "password"],
     &["postgres", "auth", "password"],
     &["postgres", "password"],
+    &["mssql", "auth", "password"],
     &["vnc", "auth", "password"],
     &["rdp", "auth", "password"],
     &["kubernetes", "auth", "token"],
@@ -628,6 +661,10 @@ mod tests {
             (
                 serde_json::json!({"postgres": {"auth": {"kind": "password", "password": "p"}}}),
                 serde_json::json!({"postgres": {"auth": {"kind": "password", "password": "Xp"}}}),
+            ),
+            (
+                serde_json::json!({"mssql": {"auth": {"kind": "password", "password": "p"}}}),
+                serde_json::json!({"mssql": {"auth": {"kind": "password", "password": "Xp"}}}),
             ),
             (
                 serde_json::json!({"vnc": {"auth": {"kind": "password", "password": "p"}}}),

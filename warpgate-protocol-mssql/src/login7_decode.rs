@@ -135,6 +135,16 @@ fn feature_id_from_u8(b: u8) -> Result<FeatureId, MssqlError> {
 
 /// Decodes the `FeatureExt` TLV block: `(feature_id: u8, len: u32 LE, data: [u8; len])*`,
 /// terminated by `0xFF`.
+///
+/// An unrecognized `feature_id` is skipped, not a decode error — found the
+/// hard way against a real client: a live SSMS LOGIN7 carried feature id
+/// `0x0D`, which isn't in `tds_protocol::FeatureId` (MS-TDS keeps adding
+/// feature ids over time; the crate's enum, `#[non_exhaustive]` for exactly
+/// this reason, doesn't cover all of them). Each entry is self-describing —
+/// its own length prefix — so skipping an unknown one and continuing to the
+/// next is always safe; aborting the whole LOGIN7 parse over one
+/// unrecognized *optional* feature would reject every client that ever
+/// sends a feature this crate doesn't know about yet, i.e. most real ones.
 fn decode_feature_extensions(data: &[u8], start: u32) -> Result<Vec<FeatureExtension>, MssqlError> {
     let mut features = Vec::new();
     let mut offset = start;
@@ -146,13 +156,24 @@ fn decode_feature_extensions(data: &[u8], start: u32) -> Result<Vec<FeatureExten
         if id_byte == FeatureId::Terminator as u8 {
             break;
         }
-        let feature_id = feature_id_from_u8(id_byte)?;
         let len_bytes = slice_field(data, offset, 4, "feature extension length")?;
         let len = u32::from_le_bytes(len_bytes.try_into().expect("slice_field(len=4)"));
         offset += 4;
         let fdata = slice_field(data, offset, len as usize, "feature extension data")?;
         offset += len;
-        features.push(FeatureExtension { feature_id, data: Bytes::copy_from_slice(fdata) });
+
+        match feature_id_from_u8(id_byte) {
+            Ok(feature_id) => {
+                features.push(FeatureExtension { feature_id, data: Bytes::copy_from_slice(fdata) });
+            }
+            Err(_) => {
+                tracing::debug!(
+                    feature_id = format!("0x{id_byte:02x}"),
+                    len,
+                    "skipping unrecognized LOGIN7 feature extension"
+                );
+            }
+        }
     }
     Ok(features)
 }

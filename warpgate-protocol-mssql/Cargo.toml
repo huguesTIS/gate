@@ -5,14 +5,17 @@ edition = "2024"
 license = "Apache-2.0"
 publish = false
 
-# Exploratory groundwork only — see ARCHITECTURE_TECHNIQUE.md §12 "MSSQL". Not
-# yet a dependency of `warpgate` (the main binary), and deliberately kept free
-# of warpgate-core/warpgate-access so `cargo check -p warpgate-protocol-mssql`
-# stays fast and isolated while the low-level protocol work is iterated on
-# against a real Dockerized SQL Server. Wire it into the workspace binary only
-# once there's a working PreLogin/Login7 server-side handshake to build on.
+# Wired into `warpgate` (the main binary) as of 23 Aug 2026 — see
+# ARCHITECTURE_TECHNIQUE.md §12 "MSSQL". The low-level protocol work
+# (PreLogin/LOGIN7, TLS-in-TDS, relay, typed decoding) was proven out in
+# isolation first, deliberately free of warpgate-core/warpgate-access so
+# `cargo check` stayed fast against a real Dockerized SQL Server while that
+# was being built; that property is gone now that this crate depends on
+# warpgate-core, same tradeoff every other protocol crate already made.
 [dependencies]
+anyhow.workspace = true
 bytes.workspace = true
+futures.workspace = true
 mssql-tls.workspace = true
 rustls.workspace = true
 thiserror.workspace = true
@@ -20,6 +23,12 @@ tds-protocol.workspace = true
 tokio = { workspace = true, features = ["net"] }
 tokio-rustls.workspace = true
 tracing.workspace = true
+url.workspace = true
+uuid.workspace = true
+warpgate-common = { path = "../warpgate-common", default-features = false }
+warpgate-common-http = { path = "../warpgate-common-http", default-features = false }
+warpgate-core = { path = "../warpgate-core", default-features = false }
+warpgate-tls = { path = "../warpgate-tls", default-features = false }
 
 [dev-dependencies]
 rcgen.workspace = true
