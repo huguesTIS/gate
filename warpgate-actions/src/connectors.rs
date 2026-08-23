@@ -104,7 +104,7 @@ pub mod ssh_command {
 
     use russh::ChannelMsg;
     use russh::client::{AuthResult, Handler};
-    use russh::keys::{PublicKey, PublicKeyBase64};
+    use russh::keys::{PublicKeyBase64, PublicKeyOrCertificate};
     use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
     use serde::Deserialize;
     use warpgate_common::WarpgateError;
@@ -126,7 +126,11 @@ pub mod ssh_command {
     impl Handler for FailClosedHandler {
         type Error = russh::Error;
 
-        async fn check_server_key(&mut self, key: &PublicKey) -> Result<bool, Self::Error> {
+        async fn check_server_key(
+            &mut self,
+            key: &PublicKeyOrCertificate,
+        ) -> Result<bool, Self::Error> {
+            let key = key.public_key();
             let Ok(entries) = KnownHost::Entity::find()
                 .filter(KnownHost::Column::Host.eq(&self.host))
                 .filter(KnownHost::Column::Port.eq(self.port))

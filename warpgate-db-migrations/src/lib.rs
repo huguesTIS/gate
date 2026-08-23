@@ -90,6 +90,15 @@ mod m00083_user_group_membership_expiry;
 mod m00084_access_policy_login_template;
 mod m00085_ssh_credentials;
 mod m00086_winrm_credentials;
+// v0.28.3 upstream sync (23 Aug 2026): these two collided on m00078/m00079
+// with our own governance migrations above (independently numbered on both
+// sides) — renumbered to m00087/m00088 to continue after ours rather than
+// renaming our own already-applied-everywhere migrations. Confirmed safe to
+// order after: neither touches a table our m00078-86 migrations also
+// change, and nothing in this codebase reads `user_roles`/`user_admin_roles`
+// `.id` (the column m00087 removes) — grepped before merging, not assumed.
+mod m00087_assignment_composite_pks;
+mod m00088_unique_target_and_group_names;
 
 pub(crate) mod helpers;
 
@@ -185,6 +194,8 @@ impl MigratorTrait for Migrator {
             Box::new(m00084_access_policy_login_template::Migration),
             Box::new(m00085_ssh_credentials::Migration),
             Box::new(m00086_winrm_credentials::Migration),
+            Box::new(m00087_assignment_composite_pks::Migration),
+            Box::new(m00088_unique_target_and_group_names::Migration),
         ]
     }
 }

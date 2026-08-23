@@ -1,42 +1,59 @@
 #![allow(non_snake_case)]
 
-pub mod AccessPolicy;
-pub mod AccessPolicyAction;
-pub mod ActionDefinition;
-pub mod ActionExecution;
-pub mod AdminRole;
-pub mod ApiToken;
-pub mod AuditMaintenanceMode;
-pub mod CertificateCredential;
-pub mod CertificateRevocation;
-pub mod FailedLoginAttempt;
-pub mod HttpSession;
-pub mod IpBlock;
-pub mod KnownHost;
-pub mod LdapServer;
-pub mod LogEntry;
-pub mod ManagedAccount;
-pub mod Node;
-pub mod OtpCredential;
-pub mod Parameters;
-pub mod PasswordCredential;
-pub mod PublicKeyCredential;
-pub mod Recording;
-pub mod Role;
-pub mod Session;
-pub mod SshClientKey;
-pub mod SshCredential;
-pub mod SsoCredential;
-pub mod Target;
-pub mod TargetGroup;
-pub mod TargetLabel;
-pub mod TargetRoleAssignment;
-pub mod Ticket;
-pub mod TicketRequest;
-pub mod User;
-pub mod UserAdminRoleAssignment;
-pub mod UserGroup;
-pub mod UserGroupMember;
-pub mod UserLockout;
-pub mod UserRoleAssignment;
-pub mod WinrmCredential;
+// macro list allows compile-time iteration
+
+#[macro_export]
+macro_rules! with_every_entity {
+    ($callback:ident) => {
+        $callback![
+            AccessPolicy,
+            AccessPolicyAction,
+            ActionDefinition,
+            ActionExecution,
+            AdminRole,
+            ApiToken,
+            AuditMaintenanceMode,
+            CertificateCredential,
+            CertificateRevocation,
+            FailedLoginAttempt,
+            HttpSession,
+            IpBlock,
+            KnownHost,
+            LdapServer,
+            LogEntry,
+            ManagedAccount,
+            Node,
+            OtpCredential,
+            Parameters,
+            PasswordCredential,
+            PublicKeyCredential,
+            Recording,
+            Role,
+            Session,
+            SshClientKey,
+            SshCredential,
+            SsoCredential,
+            Target,
+            TargetGroup,
+            TargetLabel,
+            TargetRoleAssignment,
+            Ticket,
+            TicketRequest,
+            User,
+            UserAdminRoleAssignment,
+            UserGroup,
+            UserGroupMember,
+            UserLockout,
+            UserRoleAssignment,
+            WinrmCredential,
+        ];
+    };
+}
+
+macro_rules! declare_modules {
+    ($($name:ident),* $(,)?) => {
+        $( pub mod $name; )*
+    };
+}
+
+with_every_entity!(declare_modules);
