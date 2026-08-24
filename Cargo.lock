@@ -10513,8 +10513,6 @@ dependencies = [
 [[package]]
 name = "winrm-rs"
 version = "1.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6296df157160d4d327779aad2c45ed189979955282cc52c323fc8a93c0efefb9"
 dependencies = [
  "base64 0.22.1",
  "hmac 0.13.0",

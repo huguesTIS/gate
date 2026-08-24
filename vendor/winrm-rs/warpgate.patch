@@ -1,0 +1,175 @@
+--- winrm-rs-1.1.2/src/auth/ntlm.rs
++++ base/src/auth/ntlm.rs
+@@ -47,7 +47,7 @@
+ 
+     let mut mime_body = header_part.into_bytes();
+     mime_body.extend_from_slice(&payload);
+-    mime_body.extend_from_slice(format!("\r\n{ENCRYPTED_BOUNDARY}--\r\n").as_bytes());
++    mime_body.extend_from_slice(format!("{ENCRYPTED_BOUNDARY}--\r\n").as_bytes());
+ 
+     (ENCRYPTED_CONTENT_TYPE.to_string(), mime_body)
+ }
+@@ -80,8 +80,10 @@
+ 
+     let sealed_start = encrypted_start + 4;
+ 
+-    // Find the end boundary
+-    let end_marker = format!("\r\n{ENCRYPTED_BOUNDARY}--").into_bytes();
++    // Find the end boundary — no leading CRLF, matching the server's own
++    // framing (confirmed by capture: it doesn't precede its closing
++    // boundary with one either, same as the fix to `seal_body` below).
++    let end_marker = format!("{ENCRYPTED_BOUNDARY}--").into_bytes();
+     let sealed_end = data[sealed_start..]
+         .windows(end_marker.len())
+         .position(|w| w == end_marker.as_slice())
+@@ -100,32 +102,30 @@
+ }
+ 
+ impl NtlmAuth {
+-    /// Perform the NTLM 3-step handshake and send the body as plaintext.
++    /// Perform the NTLM 3-step handshake and send `body` as plaintext.
+     ///
+-    /// Returns `(response_text, session_key)`. The session key can be used to
+-    /// create an [`NtlmSession`](crate::ntlm::NtlmSession) for sealing
+-    /// subsequent requests on the same keep-alive connection.
++    /// Returns `(response_text, session)`, ready to seal a *following*
++    /// request on this connection (its sequence numbers start at 0, since
++    /// this exchange itself carried no sealed message). Called with an
++    /// empty `body` by `send_ntlm_sealed`'s no-cached-session branch purely
++    /// to complete authentication before sending anything sealed — see
++    /// `PATCHES.md`.
+     pub(crate) async fn handshake_and_send(
+         &self,
+         http: &reqwest::Client,
+         url: &str,
+         body: &str,
+-    ) -> Result<(String, Zeroizing<[u8; 16]>), WinrmError> {
+-        let (response, session_key) = self.do_handshake(http, url, body, false).await?;
+-        Ok((response, session_key))
++    ) -> Result<(String, ntlm::NtlmSession), WinrmError> {
++        self.do_handshake(http, url, body).await
+     }
+ 
+     /// Core NTLM handshake: Type 1 → Type 2 → Type 3.
+-    ///
+-    /// If `seal` is true, the body is sealed in the Type 3 request (legacy path,
+-    /// does not work with WinRM — kept for `EncryptionMode::Always` error path).
+     async fn do_handshake(
+         &self,
+         http: &reqwest::Client,
+         url: &str,
+         body: &str,
+-        seal: bool,
+-    ) -> Result<(String, Zeroizing<[u8; 16]>), WinrmError> {
++    ) -> Result<(String, ntlm::NtlmSession), WinrmError> {
+         // Step 1: Send Type 1 (Negotiate) with empty body
+         let type1 = ntlm::create_negotiate_message();
+         let auth_header = ntlm::encode_authorization(&type1);
+@@ -231,23 +231,26 @@
+         };
+         let auth_header = ntlm::encode_authorization(&type3);
+ 
+-        // Apply NTLM sealing if requested (legacy path — doesn't work with WinRM
+-        // servers since they can't process Auth + sealed body in one request).
+-        let (content_type, request_body) = if seal {
+-            let mut session = ntlm::NtlmSession::from_auth(&session_key);
+-            let (ct, sealed) = seal_body(&mut session, body);
+-            (ct, sealed)
+-        } else {
+-            (
+-                "application/soap+xml;charset=UTF-8".to_string(),
+-                body.as_bytes().to_vec(),
+-            )
+-        };
++        // Sealing `body` into this same request (instead of sending it as
++        // plaintext) was tried and dropped — see PATCHES.md. WinRM servers
++        // reject that combination outright (400 Bad Request): NTLM
++        // authenticates the *connection*, not each request, so the body
++        // here — real or, as `send_ntlm_sealed` now does it, empty — is
++        // always sent plaintext, and any actual sealed content goes out as
++        // a separate follow-up request on the same (keep-alive) connection.
++        let request_body = body.as_bytes().to_vec();
++
++        // HTTP.sys (which fronts the WinRM listener) 411s a request with
++        // neither Content-Length nor Transfer-Encoding — reqwest doesn't
++        // reliably add Content-Length on its own for a genuinely empty
++        // body, so state it explicitly, same as the Type 1 request above.
++        let content_length = request_body.len().to_string();
+ 
+         let resp = http
+             .post(url)
+-            .header(CONTENT_TYPE, &content_type)
++            .header(CONTENT_TYPE, "application/soap+xml;charset=UTF-8")
+             .header(AUTHORIZATION, &auth_header)
++            .header("Content-Length", content_length)
+             .body(request_body)
+             .send()
+             .await
+@@ -271,7 +274,8 @@
+         }
+ 
+         let response_text = resp.text().await.map_err(WinrmError::Http)?;
+-        Ok((response_text, session_key))
++        let session = ntlm::NtlmSession::from_auth(&session_key);
++        Ok((response_text, session))
+     }
+ }
+ 
+@@ -282,7 +286,7 @@
+         url: &str,
+         body: String,
+     ) -> Result<String, WinrmError> {
+-        let (response, _session_key) = self.do_handshake(http, url, &body, false).await?;
++        let (response, _session) = self.do_handshake(http, url, &body).await?;
+         Ok(response)
+     }
+ }
+--- winrm-rs-1.1.2/src/transport.rs
++++ base/src/transport.rs
+@@ -321,17 +321,28 @@
+             }
+         }
+ 
+-        // No cached session: do full handshake with plaintext body
++        // No cached session: complete the NTLM handshake with an EMPTY body
++        // first, then send the real content sealed as a separate follow-up
++        // request on the same (keep-alive) connection — see PATCHES.md.
++        // WinRM servers reject a sealed body attached to the very request
++        // that completes NTLM auth (empirically a 400 Bad Request); an
++        // unencrypted body on that same request also gets rejected, but
++        // later (500), by any server with `AllowUnencrypted = false` (the
++        // Windows default). NTLM authenticates the *connection*, not each
++        // request, so completing the handshake first and sealing the real
++        // request after is what actually works against such servers — this
++        // crate used to conflate the two into one plaintext-body request,
++        // which never works against a default-configured Windows target.
+         let auth = NtlmAuth {
+             username: self.credentials.username.clone(),
+             password: Zeroizing::new(self.credentials.password.expose_secret().to_string()),
+             domain: self.credentials.domain.clone(),
+             cert_handle: self.cert_handle.clone(),
+         };
+-        let (response, session_key) = auth.handshake_and_send(&self.http, url, &body).await?;
++        let (_ack, mut session) = auth.handshake_and_send(&self.http, url, "").await?;
++        let response = self.send_sealed_body(&mut session, url, &body).await?;
+ 
+-        // Cache the session for subsequent sealed requests
+-        let session = NtlmSession::from_auth(&session_key);
++        // Cache the now-advanced session for subsequent sealed requests.
+         *self.ntlm_cache.lock().await = Some(NtlmSessionCache {
+             host: host.to_string(),
+             session,
+@@ -348,11 +359,13 @@
+         body: &str,
+     ) -> Result<String, WinrmError> {
+         let (content_type, sealed) = ntlm_auth::seal_body(session, body);
++        let content_length = sealed.len().to_string();
+ 
+         let resp = self
+             .http
+             .post(url)
+             .header(CONTENT_TYPE, &content_type)
++            .header("Content-Length", content_length)
+             .body(sealed)
+             .send()
+             .await

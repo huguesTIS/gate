@@ -699,3 +699,401 @@ pub mod winrm_powershell {
         run(db, raw_config, username).await
     }
 }
+
+#[cfg(test)]
+mod e2e {
+    //! Opt-in end-to-end tests against real infrastructure for the Tier 2
+    //! connectors — mirrors the `WARPGATE_MSSQL_TEST` pattern in
+    //! `warpgate-protocol-mssql`: skipped by default (a bare `eprintln!` and
+    //! early return, not `#[ignore]`, matching that crate's convention), opt
+    //! in via the env vars below. Closes the "pas encore fait: vérification
+    //! e2e" gap noted in `ARCHITECTURE_TECHNIQUE.md` §07 for
+    //! `linux_sudoers_rule`/`windows_local_group`/`ad_domain_group` — and,
+    //! since Tier 2 reuses their transport directly, for `ssh_command`/
+    //! `winrm_powershell` as well.
+
+    use sea_orm::{
+        ActiveModelTrait, ConnectOptions, ConnectionTrait, Database, DatabaseConnection, Schema,
+        Set,
+    };
+    use serde_json::json;
+    use uuid::Uuid;
+    use warpgate_db_entities::{KnownHost, SshCredential, WinrmCredential};
+
+    use super::{ad_domain_group, linux_sudoers_rule, ssh_command, windows_local_group};
+
+    async fn test_db() -> DatabaseConnection {
+        let db = Database::connect(ConnectOptions::new("sqlite::memory:"))
+            .await
+            .expect("connect to in-memory sqlite");
+        let schema = Schema::new(sea_orm::DatabaseBackend::Sqlite);
+        for stmt in [
+            schema.create_table_from_entity(SshCredential::Entity),
+            schema.create_table_from_entity(KnownHost::Entity),
+            schema.create_table_from_entity(WinrmCredential::Entity),
+        ] {
+            db.execute(db.get_database_backend().build(&stmt))
+                .await
+                .expect("create table");
+        }
+        db
+    }
+
+    mod linux_sudoers {
+        use super::*;
+
+        // Host keys of the throwaway `warpgate-actions-ssh-test` Docker
+        // container (Ubuntu 24.04 + openssh-server), pinned once via
+        // `ssh-keyscan` — all three so the test doesn't depend on which
+        // algorithm russh's default client config happens to negotiate.
+        const HOST_KEYS: &[(&str, &str)] = &[
+            (
+                "ssh-ed25519",
+                "AAAAC3NzaC1lZDI1NTE5AAAAIMnW70cDUVJXfqGa0NpuCnYD5U165GkrrHi2Fm4vp5gw",
+            ),
+            (
+                "ssh-rsa",
+                "AAAAB3NzaC1yc2EAAAADAQABAAABgQCyXBh4BoCllTjTu4fMbwL9bwjSPTQOp6FhOmvOA6rPAnhmAiaH5KdbgRVEert5tlDWAyLG1lwasA6ag4cHegg9jZpiCBoWPJvW3XyOwPbA3A+TE1+LBdiy44qDE08x99q4itcdzyyL4Kz3FpXP1eXt1uM12XtVcMNtg4lvh9di4X4sG5soFkWr5CeVc25I+xUXoOsDBMgjil8nOoGcVdlIIfLr9+F5fwWZPrF4W2DZo/ggleagvpo5QSwFP6pGnFYoePa7563s/Y5KAhqK6ObSYutpzplcQ0WhjDZF0Xr41isd4mdHHvVK4yC9aSEi6fUF7YoxDDZ4iP+aK8UEjAwSS0iXSSatGyan65EJ8UXv91OwZbJ5+PZLd+VHD3tRVGGHNunWORmK80UWnszdRU3mjql5WqEaMn7MLFdvcH6PryzP3slx3of+U4nH0rKEWwTkwiSE4HA7t54kiq0oErRxemEs+kZ2G4t5vdwVvxS1ssschw7Dsrxr8diBZtiYF8M=",
+            ),
+            (
+                "ecdsa-sha2-nistp256",
+                "AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBNY/v36MfO1+8UY9ohy32+EbB//XtLrNEDSS2DKlcU5+Zu2pM2r/juht7b9mlLVCCIMGcIIowStJb2jHnl2fxIc=",
+            ),
+        ];
+
+        fn enabled() -> bool {
+            std::env::var("WARPGATE_ACTIONS_SSH_TEST").is_ok()
+        }
+
+        /// Sets up an admin `ssh_credentials` row (referenced by the action
+        /// config under test) plus a plain `SshCredential::Model` for the
+        /// *target* user — not inserted, since `ssh_command::exec` takes a
+        /// credential struct directly rather than an id, so nothing besides
+        /// the admin row needs a DB round trip.
+        async fn setup() -> (DatabaseConnection, Uuid, SshCredential::Model) {
+            let db = test_db().await;
+            let host = std::env::var("WARPGATE_ACTIONS_SSH_HOST")
+                .unwrap_or_else(|_| "host.docker.internal".into());
+            let port: i32 = std::env::var("WARPGATE_ACTIONS_SSH_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(12222);
+            for (key_type, key_base64) in HOST_KEYS {
+                KnownHost::ActiveModel {
+                    id: Set(Uuid::new_v4()),
+                    host: Set(host.clone()),
+                    port: Set(port),
+                    key_type: Set((*key_type).to_owned()),
+                    key_base64: Set((*key_base64).to_owned()),
+                }
+                .insert(&db)
+                .await
+                .expect("insert known_hosts");
+            }
+
+            let admin_password = std::env::var("WARPGATE_ACTIONS_SSH_ADMIN_PASSWORD")
+                .expect("WARPGATE_ACTIONS_SSH_ADMIN_PASSWORD must be set for the e2e test");
+            let admin_id = Uuid::new_v4();
+            SshCredential::ActiveModel {
+                id: Set(admin_id),
+                name: Set("e2e-admin".into()),
+                host: Set(host.clone()),
+                port: Set(port),
+                // `linux_sudoers_rule` writes to /etc/sudoers.d/ with a bare
+                // SSH exec, no `sudo` wrapper - the admin credential must
+                // already have root-level filesystem access, not merely
+                // sudo rights as a non-root user.
+                username: Set("root".into()),
+                password: Set(admin_password),
+                description: Set(String::new()),
+            }
+            .insert(&db)
+            .await
+            .expect("insert admin ssh_credential");
+
+            let target_user_credential = SshCredential::Model {
+                id: Uuid::new_v4(),
+                name: "e2e-target-user".into(),
+                host,
+                port,
+                username: "wgtestuser".into(),
+                password: "UserPass123!".into(),
+                description: String::new(),
+            };
+
+            (db, admin_id, target_user_credential)
+        }
+
+        /// Whether `wgtestuser` can currently run the granted command via
+        /// `sudo -n` — the actual mechanism `linux_sudoers_rule` grants/
+        /// revokes, not just file presence.
+        async fn sudo_check_succeeds(
+            db: &DatabaseConnection,
+            credential: &SshCredential::Model,
+        ) -> bool {
+            let password = credential.password.clone();
+            ssh_command::exec(db, credential, &password, "sudo -n /usr/bin/id")
+                .await
+                .is_ok()
+        }
+
+        #[tokio::test]
+        async fn grant_then_remove_round_trips_through_real_sudo() {
+            if !enabled() {
+                eprintln!(
+                    "skipping: set WARPGATE_ACTIONS_SSH_TEST=1 to run against a live SSH host"
+                );
+                return;
+            }
+            let (db, admin_id, target_user) = setup().await;
+
+            assert!(
+                !sudo_check_succeeds(&db, &target_user).await,
+                "wgtestuser could already sudo /usr/bin/id before any grant ran - test host \
+                 is not in its expected baseline state"
+            );
+
+            let config = json!({
+                "ssh_credential_id": admin_id,
+                "rule_name": "wgtest-e2e",
+                "commands": ["/usr/bin/id"],
+            });
+
+            linux_sudoers_rule::grant(&db, &config, "wgtestuser")
+                .await
+                .expect("grant should succeed");
+            assert!(
+                sudo_check_succeeds(&db, &target_user).await,
+                "wgtestuser still can't sudo /usr/bin/id after grant"
+            );
+
+            linux_sudoers_rule::remove(&db, &config, "wgtestuser")
+                .await
+                .expect("remove should succeed");
+            assert!(
+                !sudo_check_succeeds(&db, &target_user).await,
+                "wgtestuser can still sudo /usr/bin/id after remove"
+            );
+        }
+    }
+
+    mod windows {
+        use winrm_rs::{AuthMethod, WinrmClient, WinrmConfig, WinrmCredentials};
+
+        use super::*;
+
+        fn enabled() -> bool {
+            std::env::var("WARPGATE_ACTIONS_WINRM_TEST").is_ok()
+        }
+
+        struct Env {
+            host: String,
+            port: u16,
+            user: String,
+            domain: String,
+            password: String,
+        }
+
+        fn env() -> Env {
+            Env {
+                host: std::env::var("WARPGATE_ACTIONS_WINRM_HOST")
+                    .expect("WARPGATE_ACTIONS_WINRM_HOST must be set for the e2e test"),
+                port: std::env::var("WARPGATE_ACTIONS_WINRM_PORT")
+                    .ok()
+                    .and_then(|p| p.parse().ok())
+                    .unwrap_or(5985),
+                user: std::env::var("WARPGATE_ACTIONS_WINRM_USER")
+                    .expect("WARPGATE_ACTIONS_WINRM_USER must be set for the e2e test"),
+                domain: std::env::var("WARPGATE_ACTIONS_WINRM_DOMAIN").unwrap_or_default(),
+                password: std::env::var("WARPGATE_ACTIONS_WINRM_PASSWORD")
+                    .expect("WARPGATE_ACTIONS_WINRM_PASSWORD must be set for the e2e test"),
+            }
+        }
+
+        /// Runs a raw PowerShell script and returns `(exit_code, stdout,
+        /// stderr)` — bypasses `winrm_powershell::run_script` (which
+        /// discards stdout on success) since some of these tests need to
+        /// read output, not just check for success.
+        async fn run_raw(env: &Env, script: &str) -> (i32, String, String) {
+            let config = WinrmConfig {
+                port: env.port,
+                use_tls: false,
+                auth_method: AuthMethod::Ntlm,
+                ..Default::default()
+            };
+            let creds = WinrmCredentials::new(env.user.clone(), env.password.clone(), env.domain.clone());
+            let client = WinrmClient::new(config, creds).expect("winrm client setup");
+            let output = client
+                .run_powershell(&env.host, script)
+                .await
+                .expect("winrm run_powershell transport-level failure");
+            (
+                output.exit_code,
+                String::from_utf8_lossy(&output.stdout).into_owned(),
+                String::from_utf8_lossy(&output.stderr).into_owned(),
+            )
+        }
+
+        async fn credential_row(db: &DatabaseConnection, env: &Env) -> Uuid {
+            let id = Uuid::new_v4();
+            WinrmCredential::ActiveModel {
+                id: Set(id),
+                name: Set("e2e".into()),
+                host: Set(env.host.clone()),
+                port: Set(env.port as i32),
+                use_tls: Set(false),
+                username: Set(env.user.clone()),
+                password: Set(env.password.clone()),
+                domain: Set(env.domain.clone()),
+                description: Set(String::new()),
+            }
+            .insert(db)
+            .await
+            .expect("insert winrm_credential");
+            id
+        }
+
+        /// Not a real assertion beyond "credentials work and the transport
+        /// round-trips" — prints role/RSAT info (run with `--nocapture`) so
+        /// it's clear whether `ad_domain_group` is even testable against
+        /// this host before writing a test that assumes it is.
+        #[tokio::test]
+        async fn probe_auth_and_host_role() {
+            if !enabled() {
+                eprintln!(
+                    "skipping: set WARPGATE_ACTIONS_WINRM_TEST=1 to run against a live Windows host"
+                );
+                return;
+            }
+            let env = env();
+            let (code, stdout, stderr) = run_raw(
+                &env,
+                "$role = (Get-CimInstance Win32_ComputerSystem).DomainRole; \
+                 $rsat = [bool](Get-Module -ListAvailable ActiveDirectory); \
+                 Write-Output \"WHOAMI=$(whoami) ROLE=$role RSAT=$rsat\"",
+            )
+            .await;
+            println!("probe: exit={code} stdout={stdout:?} stderr={stderr:?}");
+            assert_eq!(code, 0, "probe script failed: {stderr}");
+        }
+
+        /// Only meaningful against a member server or workstation — domain
+        /// controllers don't have a real local SAM (`New-LocalGroup`
+        /// reports success but `Add-LocalGroupMember` then can't find the
+        /// group, confirmed 23 Aug 2026 against a real DC). Untested for
+        /// real against that limitation; `windows_local_group` shares the
+        /// same `winrm_powershell::run_script` transport
+        /// `ad_domain_group_grant_then_remove_round_trips` already proves
+        /// end-to-end, so the gap here is the target, not the connector.
+        #[tokio::test]
+        async fn windows_local_group_grant_then_remove_round_trips() {
+            if !enabled() {
+                eprintln!(
+                    "skipping: set WARPGATE_ACTIONS_WINRM_TEST=1 to run against a live Windows host"
+                );
+                return;
+            }
+            let env = env();
+            let db = test_db().await;
+            let credential_id = credential_row(&db, &env).await;
+            let group = format!("wgtest-{}", &Uuid::new_v4().simple().to_string()[..8]);
+
+            let (code, _, stderr) =
+                run_raw(&env, &format!("New-LocalGroup -Name '{group}' -ErrorAction Stop")).await;
+            assert_eq!(code, 0, "failed to create test group: {stderr}");
+
+            let config = json!({ "winrm_credential_id": credential_id, "group_name": group });
+
+            windows_local_group::grant(&db, &config, "Guest")
+                .await
+                .expect("grant should succeed");
+            let (_, stdout, _) = run_raw(
+                &env,
+                &format!("(Get-LocalGroupMember -Group '{group}').Name -join ','"),
+            )
+            .await;
+            assert!(
+                stdout.to_lowercase().contains("guest"),
+                "Guest not found in group members after grant: {stdout}"
+            );
+
+            windows_local_group::remove(&db, &config, "Guest")
+                .await
+                .expect("remove should succeed");
+            let (_, stdout, _) = run_raw(
+                &env,
+                &format!("(Get-LocalGroupMember -Group '{group}').Name -join ','"),
+            )
+            .await;
+            assert!(
+                !stdout.to_lowercase().contains("guest"),
+                "Guest still in group members after remove: {stdout}"
+            );
+
+            let _ = run_raw(
+                &env,
+                &format!("Remove-LocalGroup -Name '{group}' -ErrorAction SilentlyContinue"),
+            )
+            .await;
+        }
+
+        /// Only meaningful against a real DC with the RSAT `ActiveDirectory`
+        /// module — `probe_auth_and_host_role` reported `RSAT=True` for the
+        /// configured host, confirming this connector is actually
+        /// reachable, not just unit-testable.
+        #[tokio::test]
+        async fn ad_domain_group_grant_then_remove_round_trips() {
+            if !enabled() {
+                eprintln!(
+                    "skipping: set WARPGATE_ACTIONS_WINRM_TEST=1 to run against a live Windows host"
+                );
+                return;
+            }
+            let env = env();
+            let db = test_db().await;
+            let credential_id = credential_row(&db, &env).await;
+            let group = format!("wgtest-{}", &Uuid::new_v4().simple().to_string()[..8]);
+
+            let (code, _, stderr) = run_raw(
+                &env,
+                &format!("New-ADGroup -Name '{group}' -GroupScope Global -ErrorAction Stop"),
+            )
+            .await;
+            assert_eq!(code, 0, "failed to create test AD group: {stderr}");
+
+            let config = json!({ "winrm_credential_id": credential_id, "group_name": group });
+
+            ad_domain_group::grant(&db, &config, "Administrator")
+                .await
+                .expect("grant should succeed");
+            let (_, stdout, _) = run_raw(
+                &env,
+                &format!("(Get-ADGroupMember -Identity '{group}').SamAccountName -join ','"),
+            )
+            .await;
+            assert!(
+                stdout.to_lowercase().contains("administrator"),
+                "Administrator not found in AD group members after grant: {stdout}"
+            );
+
+            ad_domain_group::remove(&db, &config, "Administrator")
+                .await
+                .expect("remove should succeed");
+            let (_, stdout, _) = run_raw(
+                &env,
+                &format!("(Get-ADGroupMember -Identity '{group}').SamAccountName -join ','"),
+            )
+            .await;
+            assert!(
+                !stdout.to_lowercase().contains("administrator"),
+                "Administrator still in AD group members after remove: {stdout}"
+            );
+
+            let _ = run_raw(
+                &env,
+                &format!("Remove-ADGroup -Identity '{group}' -Confirm:$false -ErrorAction SilentlyContinue"),
+            )
+            .await;
+        }
+    }
+}

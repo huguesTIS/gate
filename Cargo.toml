@@ -39,6 +39,7 @@ exclude = [
     "vendor/ironrdp-session",
     "vendor/picky",
     "vendor/sspi",
+    "vendor/winrm-rs",
 ]
 default-members = ["warpgate"]
 resolver = "2"
@@ -52,6 +53,7 @@ ironrdp-server = { path = "vendor/ironrdp-server" }
 ironrdp-session = { path = "vendor/ironrdp-session" }
 picky = { path = "vendor/picky" }
 sspi = { path = "vendor/sspi" }
+winrm-rs = { path = "vendor/winrm-rs" }
 
 [workspace.dependencies]
 aes-gcm = { version = "0.11", default-features = false, features = [

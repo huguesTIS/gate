@@ -14,6 +14,10 @@ pre-build = ["apt-get update && apt-get install --assume-yes libz-dev libxkbcomm
 #
 # `WARPGATE_MSSQL_TEST`/`WARPGATE_MSSQL_TEST_ADDR` are the same pattern for
 # warpgate-protocol-mssql's live-SQL-Server round-trip test — see its module docs.
+#
+# `WARPGATE_ACTIONS_SSH_TEST`/`WARPGATE_ACTIONS_WINRM_TEST` and their `_HOST`/
+# `_PORT`/`_USER`/`_DOMAIN`/`_PASSWORD` companions are the same pattern for
+# warpgate-actions's Tier 2 connector e2e tests — see connectors.rs's `e2e` module.
 passthrough = [
     "OPENBAO_ADDR",
     "OPENBAO_TOKEN",
@@ -21,4 +25,14 @@ passthrough = [
     "WARPGATE_MSSQL_TEST",
     "WARPGATE_MSSQL_TEST_ADDR",
     "WARPGATE_MSSQL_TEST_SA_PASSWORD",
+    "WARPGATE_ACTIONS_SSH_TEST",
+    "WARPGATE_ACTIONS_SSH_HOST",
+    "WARPGATE_ACTIONS_SSH_PORT",
+    "WARPGATE_ACTIONS_SSH_ADMIN_PASSWORD",
+    "WARPGATE_ACTIONS_WINRM_TEST",
+    "WARPGATE_ACTIONS_WINRM_HOST",
+    "WARPGATE_ACTIONS_WINRM_PORT",
+    "WARPGATE_ACTIONS_WINRM_USER",
+    "WARPGATE_ACTIONS_WINRM_DOMAIN",
+    "WARPGATE_ACTIONS_WINRM_PASSWORD",
 ]
