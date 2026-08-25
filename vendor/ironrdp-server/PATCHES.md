@@ -55,3 +55,24 @@ independently at the `ironrdp_svc`/`ironrdp_acceptor` layer and confirmed workin
 
 When re-vendoring: check whether a newer upstream release adds a generic static-channel hook (or
 RDPDR support directly) — if so, drop this half of the patch and consume that instead.
+
+## Add `ServerEvent::Rdpdr` for out-of-band RDPDR pushes
+
+Prep for Phase 3 of the RDP + Hello smart-card bridge (`ARCHITECTURE_TECHNIQUE.md` §10, real
+relay — landed after Phase 2, the target-facing client wiring). `Clipboard`/`Rdpsnd` already push
+server-initiated messages through `ServerEvent` variants that call a *method* on the live,
+concretely-typed processor (`self.get_svc_processor::<CliprdrServer>()`, itself an upstream
+crate). RDPDR has no such upstream server-role processor to call into — ours
+(`RdpdrServerChannel`, `warpgate-protocol-rdp/src/server/rdpdr.rs`) is embedder-owned and reached
+through the type-erasing `RdpdrServer` wrapper (see the patch above), which only exposes the
+generic `SvcProcessor` methods, not anything RDPDR-specific.
+
+So `ServerEvent::Rdpdr(Vec<SvcMessage>)` takes pre-built messages instead of a protocol-specific
+enum + a method call: the embedder (Warpgate) builds the exact `SvcMessage`s itself — it already
+knows how, since Phase 1's handshake code does the same — and this arm's dispatch code only needs
+the RDPDR channel id (`get_channel_id_by_type::<RdpdrServer>()`) to frame and write them. No
+`get_svc_processor` call needed, unlike `Clipboard`/`Rdpsnd`.
+
+When re-vendoring: check whether upstream ever adds real server-role RDPDR support (unlikely —
+see the reasoning in the previous patch section for why the client role is the one everyone else
+needs) — if so, this whole file's RDPDR-specific patches can likely be dropped in favor of it.

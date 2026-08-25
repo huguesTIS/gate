@@ -24,7 +24,9 @@ use ironrdp_pdu::rdp::server_error_info::{ErrorInfo, ProtocolIndependentCode, Se
 use ironrdp_pdu::x224::X224;
 use ironrdp_pdu::{Action, PduResult, decode_err, mcs, nego, rdp};
 use ironrdp_rdpsnd as rdpsnd;
-use ironrdp_svc::{ChannelFlags, StaticChannelId, StaticChannelSet, SvcProcessor, server_encode_svc_messages};
+use ironrdp_svc::{
+    ChannelFlags, StaticChannelId, StaticChannelSet, SvcMessage, SvcProcessor, server_encode_svc_messages,
+};
 use ironrdp_tokio::{FramedRead, FramedWrite, TokioFramed, split_tokio_framed, unsplit_tokio_framed};
 use rdpsnd::server::{RdpsndServer, RdpsndServerMessage};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt as _};
@@ -496,6 +498,13 @@ pub enum ServerEvent {
     Quit(String),
     Clipboard(ClipboardMessage),
     Rdpsnd(RdpsndServerMessage),
+    /// Pre-built RDPDR SVC messages to push out-of-band on the RDPDR channel — e.g. a
+    /// `DeviceControlResponse` completing a smart-card IOCTL once the embedder's own
+    /// relay logic has an answer for it. Unlike `Clipboard`/`Rdpsnd`, the embedder's own
+    /// server-role RDPDR state machine (`ironrdp-server` has no server-role RDPDR
+    /// support of its own — see `RdpdrServerFactory`) builds the messages itself, so
+    /// this arm only needs the RDPDR channel id, not a processor method call.
+    Rdpdr(Vec<SvcMessage>),
     Echo(EchoServerMessage),
     SetCredentials(Credentials),
     GetLocalAddr(oneshot::Sender<Option<SocketAddr>>),
@@ -1188,6 +1197,14 @@ impl RdpServer {
                         .get_channel_id_by_type::<CliprdrServer>()
                         .context("SVC channel not found")?;
                     let data = server_encode_svc_messages(msgs.into(), channel_id, user_channel_id)?;
+                    writer.write_all(&data).await?;
+                }
+                ServerEvent::Rdpdr(msgs) => {
+                    let Some(channel_id) = self.get_channel_id_by_type::<RdpdrServer>() else {
+                        warn!("No rdpdr channel, dropping event");
+                        continue;
+                    };
+                    let data = server_encode_svc_messages(msgs, channel_id, user_channel_id)?;
                     writer.write_all(&data).await?;
                 }
                 ServerEvent::Echo(msg) => match msg {

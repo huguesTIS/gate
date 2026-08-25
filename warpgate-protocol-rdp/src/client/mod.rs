@@ -5,6 +5,7 @@
 //! so the web-desktop manager and the native RDP server front end both work unchanged.
 
 mod input;
+mod rdpdr;
 mod tls;
 
 use std::time::Duration;
@@ -28,8 +29,10 @@ use ironrdp::pdu::rdp::capability_sets::MajorPlatformType;
 use ironrdp::pdu::rdp::client_info::{PerformanceFlags, TimezoneInfo};
 use ironrdp::pdu::rdp::headers::ShareDataPdu;
 use ironrdp::pdu::rdp::refresh_rectangle::RefreshRectanglePdu;
+use ironrdp::rdpdr::Rdpdr;
 use ironrdp::session::image::DecodedImage;
 use ironrdp::session::{ActiveStage, ActiveStageBuilder, ActiveStageOutput};
+use ironrdp::svc::{SvcMessage, SvcProcessorMessages};
 use ironrdp_tokio::reqwest::ReqwestNetworkClient;
 use ironrdp_tokio::{FramedWrite as _, TokioFramed};
 use tokio::net::TcpStream;
@@ -39,6 +42,7 @@ use warpgate_common::{RdpTargetAuth, TargetRdpOptions};
 use warpgate_core::{DesktopEvent, DesktopInput, DesktopRect, DesktopState};
 
 use crate::clipboard::{Clipboard, ClipboardSink, TextClipboard};
+use crate::client::rdpdr::{SMARTCARD_DEVICE_ID, TargetRdpdr};
 
 /// Deadline for the TCP connect to the target.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -110,6 +114,11 @@ pub async fn run(
     let (clipboard_tx, clipboard_rx) = unbounded_channel();
     let clipboard = Clipboard::new(ClientClipboardSink(clipboard_tx));
 
+    // Phase 2 of the RDP + Hello smart-card bridge (`ARCHITECTURE_TECHNIQUE.md` §10):
+    // `TargetRdpdr` pushes its (currently synthetic) answers here; drained in `active_loop`
+    // the same way `clipboard_rx` is.
+    let (rdpdr_tx, rdpdr_rx) = unbounded_channel();
+
     let (connection_result, framed) = tokio::time::timeout(
         HANDSHAKE_TIMEOUT,
         connect(
@@ -119,6 +128,7 @@ pub async fn run(
             options.verify_tls,
             options.tls_security(),
             clipboard.backend(),
+            rdpdr_tx,
         ),
     )
     .await
@@ -148,6 +158,7 @@ pub async fn run(
         &mut abort_rx,
         &clipboard,
         clipboard_rx,
+        rdpdr_rx,
     )
     .await
 }
@@ -162,6 +173,7 @@ async fn active_loop(
     abort_rx: &mut UnboundedReceiver<()>,
     clipboard: &Clipboard<ClientClipboardSink>,
     mut clipboard_rx: UnboundedReceiver<ClipboardOut>,
+    mut rdpdr_rx: UnboundedReceiver<SvcMessage>,
 ) -> Result<()> {
     let activation_factory = connection_result.activation_factory;
     let mut active_stage = ActiveStageBuilder {
@@ -245,6 +257,16 @@ async fn active_loop(
                 {
                     return Ok(());
                 }
+                continue;
+            }
+            msg = rdpdr_rx.recv() => {
+                // The sender is held by `TargetRdpdr`, itself owned by `active_stage`'s
+                // static channel set, which outlives this loop — same reasoning as
+                // `clipboard_rx` above.
+                let Some(msg) = msg else {
+                    return Ok(());
+                };
+                send_rdpdr(&mut framed, &mut active_stage, msg).await?;
                 continue;
             }
             pdu = framed.read_pdu() => {
@@ -366,6 +388,30 @@ async fn send_clipboard(
         .write_all(&frame)
         .await
         .context("sending clipboard message")
+}
+
+/// Push a pre-built RDPDR message (already the full answer to a smart-card call — see
+/// `TargetRdpdr::respond`) onto the wire. Unlike `send_clipboard`, there's no message-type
+/// dispatch to do here: `TargetRdpdr` builds the exact `SvcMessage` to send.
+///
+/// Takes `&mut ActiveStage` even though `process_svc_processor_messages` only needs `&self`
+/// — `&ActiveStage` (a shared reference) requires `ActiveStage: Sync` to stay `Send` across
+/// the `tokio::spawn`'d session future, which it isn't (it holds `dyn SvcProcessor`, which
+/// isn't `Sync`); `&mut ActiveStage` only requires `ActiveStage: Send`, which it is. Same
+/// reasoning `send_clipboard` already follows.
+async fn send_rdpdr(framed: &mut Framed, active_stage: &mut ActiveStage, message: SvcMessage) -> Result<()> {
+    let frame = match active_stage.process_svc_processor_messages(SvcProcessorMessages::<Rdpdr>::new(vec![message]))
+    {
+        Ok(frame) => frame,
+        Err(error) => {
+            warn!(%error, "failed to frame RDPDR message");
+            return Ok(());
+        }
+    };
+    framed
+        .write_all(&frame)
+        .await
+        .context("sending RDPDR message")
 }
 
 /// Drive the deactivation-reactivation sequence. Returns the new desktop size if the target
@@ -663,6 +709,7 @@ async fn connect(
     verify_tls: bool,
     tls_security: warpgate_common::RdpTlsSecurity,
     clipboard: TextClipboard<ClientClipboardSink>,
+    rdpdr_tx: UnboundedSender<SvcMessage>,
 ) -> Result<(ConnectionResult, Framed)> {
     let tcp_stream = tokio::time::timeout(
         CONNECT_TIMEOUT,
@@ -678,12 +725,21 @@ async fn connect(
     // Advertise the Display Control DVC so viewer-driven resolution changes can be pushed
     // to the target mid-session (MS-RDPEDISP). The capabilities callback has nothing to
     // reply with; `ActiveStage::encode_resize` drives the channel once it is ready.
+    //
+    // The RDPDR channel (Phase 2 of the RDP + Hello smart-card bridge,
+    // `ARCHITECTURE_TECHNIQUE.md` §10) announces one synthetic smart card device —
+    // `TargetRdpdr` answers its I/O requests, see that module for what it does and
+    // doesn't do yet.
     let mut connector = connector::ClientConnector::new(config, client_addr)
         .with_static_channel(
             DrdynvcClient::new()
                 .with_dynamic_channel(DisplayControlClient::new(|_caps| Ok(Vec::new()))),
         )
-        .with_static_channel(CliprdrClient::new(Box::new(clipboard)));
+        .with_static_channel(CliprdrClient::new(Box::new(clipboard)))
+        .with_static_channel(
+            Rdpdr::new(Box::new(TargetRdpdr::new(rdpdr_tx)), "warpgate".to_owned())
+                .with_smartcard(SMARTCARD_DEVICE_ID),
+        );
 
     let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector)
         .await
