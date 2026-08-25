@@ -11,6 +11,7 @@ use super::display::{DesktopSize, RdpServerDisplay};
 #[cfg(feature = "egfx")]
 use super::gfx::GfxServerFactory;
 use super::handler::{KeyboardEvent, MouseEvent, RdpServerInputHandler};
+use super::rdpdr::RdpdrServerFactory;
 use super::server::{ConnectionHandler, CredentialValidator, RdpServer, RdpServerOptions, RdpServerSecurity};
 use crate::{DisplayUpdate, RdpServerDisplayUpdates, SoundServerFactory};
 
@@ -35,6 +36,7 @@ pub struct BuilderDone {
     handler: Box<dyn RdpServerInputHandler>,
     display: Box<dyn RdpServerDisplay>,
     cliprdr_factory: Option<Box<dyn CliprdrServerFactory>>,
+    rdpdr_factory: Option<Box<dyn RdpdrServerFactory>>,
     sound_factory: Option<Box<dyn SoundServerFactory>>,
     connection_handler: Option<Box<dyn ConnectionHandler>>,
     credential_validator: Option<Arc<dyn CredentialValidator>>,
@@ -135,6 +137,7 @@ impl RdpServerBuilder<WantsDisplay> {
                 display: Box::new(display),
                 sound_factory: None,
                 cliprdr_factory: None,
+                rdpdr_factory: None,
                 connection_handler: None,
                 credential_validator: None,
                 codecs: server_codecs_capabilities(&[]).expect("can't panic for &[]"),
@@ -157,6 +160,7 @@ impl RdpServerBuilder<WantsDisplay> {
                 display: Box::new(NoopDisplay),
                 sound_factory: None,
                 cliprdr_factory: None,
+                rdpdr_factory: None,
                 connection_handler: None,
                 credential_validator: None,
                 codecs: server_codecs_capabilities(&[]).expect("can't panic for &[]"),
@@ -174,6 +178,15 @@ impl RdpServerBuilder<WantsDisplay> {
 impl RdpServerBuilder<BuilderDone> {
     pub fn with_cliprdr_factory(mut self, cliprdr_factory: Option<Box<dyn CliprdrServerFactory>>) -> Self {
         self.state.cliprdr_factory = cliprdr_factory;
+        self
+    }
+
+    /// Set a factory for the RDPDR (device redirection) server-role channel.
+    ///
+    /// See [`RdpdrServerFactory`] — nothing upstream implements the RDPDR
+    /// server role, so the embedder supplies the whole processor.
+    pub fn with_rdpdr_factory(mut self, rdpdr_factory: Option<Box<dyn RdpdrServerFactory>>) -> Self {
+        self.state.rdpdr_factory = rdpdr_factory;
         self
     }
 
@@ -302,6 +315,7 @@ impl RdpServerBuilder<BuilderDone> {
             self.state.display,
             self.state.sound_factory,
             self.state.cliprdr_factory,
+            self.state.rdpdr_factory,
             self.state.connection_handler,
             #[cfg(feature = "egfx")]
             self.state.gfx_factory,

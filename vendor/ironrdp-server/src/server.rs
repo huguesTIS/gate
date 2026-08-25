@@ -42,6 +42,7 @@ use crate::encoder::{UpdateEncoder, UpdateEncoderCodecs};
 #[cfg(feature = "egfx")]
 use crate::gfx::{EgfxServerMessage, GfxServerFactory};
 use crate::handler::RdpServerInputHandler;
+use crate::rdpdr::{RdpdrServer, RdpdrServerFactory};
 use crate::{SoundServerFactory, builder, capabilities};
 
 /// TCP listen backlog size for the RDP server socket.
@@ -456,6 +457,7 @@ pub struct RdpServer {
     static_channels: StaticChannelSet,
     sound_factory: Option<Box<dyn SoundServerFactory>>,
     cliprdr_factory: Option<Box<dyn CliprdrServerFactory>>,
+    rdpdr_factory: Option<Box<dyn RdpdrServerFactory>>,
     echo_handle: EchoServerHandle,
     #[cfg(feature = "egfx")]
     gfx_factory: Option<Box<dyn GfxServerFactory>>,
@@ -531,6 +533,7 @@ impl RdpServer {
         display: Box<dyn RdpServerDisplay>,
         mut sound_factory: Option<Box<dyn SoundServerFactory>>,
         mut cliprdr_factory: Option<Box<dyn CliprdrServerFactory>>,
+        mut rdpdr_factory: Option<Box<dyn RdpdrServerFactory>>,
         connection_handler: Option<Box<dyn ConnectionHandler>>,
         #[cfg(feature = "egfx")] mut gfx_factory: Option<Box<dyn GfxServerFactory>>,
         display_suppressed: Option<Arc<AtomicBool>>,
@@ -539,6 +542,9 @@ impl RdpServer {
         let (ev_sender, ev_receiver) = ServerEvent::create_channel();
         if let Some(cliprdr) = cliprdr_factory.as_mut() {
             cliprdr.set_sender(ev_sender.clone());
+        }
+        if let Some(rdpdr) = rdpdr_factory.as_mut() {
+            rdpdr.set_sender(ev_sender.clone());
         }
         if let Some(snd) = sound_factory.as_mut() {
             snd.set_sender(ev_sender.clone());
@@ -554,6 +560,7 @@ impl RdpServer {
             static_channels: StaticChannelSet::new(),
             sound_factory,
             cliprdr_factory,
+            rdpdr_factory,
             echo_handle: EchoServerHandle::new(ev_sender.clone()),
             #[cfg(feature = "egfx")]
             gfx_factory,
@@ -689,6 +696,11 @@ impl RdpServer {
             let cliprdr = CliprdrServer::new(backend);
 
             acceptor.attach_static_channel(cliprdr);
+        }
+
+        if let Some(rdpdr_factory) = self.rdpdr_factory.as_deref() {
+            let processor = rdpdr_factory.build_rdpdr_processor();
+            acceptor.attach_static_channel(RdpdrServer::new(processor));
         }
 
         if let Some(factory) = self.sound_factory.as_deref() {

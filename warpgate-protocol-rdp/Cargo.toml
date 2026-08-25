@@ -18,6 +18,10 @@ ironrdp = { version = "0.17", features = [
     "input",
     "dvc",
     "displaycontrol",
+    "rdpdr",
+    "svc",
+    "core",
+    "pdu",
 ] }
 ironrdp-server = "0.13"
 ironrdp-tokio = "0.10"

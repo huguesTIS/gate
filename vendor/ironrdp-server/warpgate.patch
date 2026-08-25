@@ -1,6 +1,87 @@
+--- ironrdp-server-0.13.0/src/builder.rs
++++ base/src/builder.rs
+@@ -11,6 +11,7 @@
+ #[cfg(feature = "egfx")]
+ use super::gfx::GfxServerFactory;
+ use super::handler::{KeyboardEvent, MouseEvent, RdpServerInputHandler};
++use super::rdpdr::RdpdrServerFactory;
+ use super::server::{ConnectionHandler, CredentialValidator, RdpServer, RdpServerOptions, RdpServerSecurity};
+ use crate::{DisplayUpdate, RdpServerDisplayUpdates, SoundServerFactory};
+ 
+@@ -35,6 +36,7 @@
+     handler: Box<dyn RdpServerInputHandler>,
+     display: Box<dyn RdpServerDisplay>,
+     cliprdr_factory: Option<Box<dyn CliprdrServerFactory>>,
++    rdpdr_factory: Option<Box<dyn RdpdrServerFactory>>,
+     sound_factory: Option<Box<dyn SoundServerFactory>>,
+     connection_handler: Option<Box<dyn ConnectionHandler>>,
+     credential_validator: Option<Arc<dyn CredentialValidator>>,
+@@ -135,6 +137,7 @@
+                 display: Box::new(display),
+                 sound_factory: None,
+                 cliprdr_factory: None,
++                rdpdr_factory: None,
+                 connection_handler: None,
+                 credential_validator: None,
+                 codecs: server_codecs_capabilities(&[]).expect("can't panic for &[]"),
+@@ -157,6 +160,7 @@
+                 display: Box::new(NoopDisplay),
+                 sound_factory: None,
+                 cliprdr_factory: None,
++                rdpdr_factory: None,
+                 connection_handler: None,
+                 credential_validator: None,
+                 codecs: server_codecs_capabilities(&[]).expect("can't panic for &[]"),
+@@ -177,6 +181,15 @@
+         self
+     }
+ 
++    /// Set a factory for the RDPDR (device redirection) server-role channel.
++    ///
++    /// See [`RdpdrServerFactory`] — nothing upstream implements the RDPDR
++    /// server role, so the embedder supplies the whole processor.
++    pub fn with_rdpdr_factory(mut self, rdpdr_factory: Option<Box<dyn RdpdrServerFactory>>) -> Self {
++        self.state.rdpdr_factory = rdpdr_factory;
++        self
++    }
++
+     pub fn with_sound_factory(mut self, sound: Option<Box<dyn SoundServerFactory>>) -> Self {
+         self.state.sound_factory = sound;
+         self
+@@ -302,6 +315,7 @@
+             self.state.display,
+             self.state.sound_factory,
+             self.state.cliprdr_factory,
++            self.state.rdpdr_factory,
+             self.state.connection_handler,
+             #[cfg(feature = "egfx")]
+             self.state.gfx_factory,
+--- ironrdp-server-0.13.0/src/lib.rs
++++ base/src/lib.rs
+@@ -18,10 +18,12 @@
+ mod handler;
+ #[cfg(feature = "helper")]
+ mod helper;
++mod rdpdr;
+ mod server;
+ mod sound;
+ 
+ pub use clipboard::CliprdrServerFactory;
++pub use rdpdr::{RdpdrServer, RdpdrServerFactory};
+ pub use display::{
+     BitmapUpdate, ColorPointer, DesktopSize, DisplayUpdate, Framebuffer, PixelFormat, RGBAPointer, RdpServerDisplay,
+     RdpServerDisplayUpdates,
 --- ironrdp-server-0.13.0/src/server.rs
 +++ base/src/server.rs
-@@ -165,6 +165,7 @@
+@@ -42,6 +42,7 @@
+ #[cfg(feature = "egfx")]
+ use crate::gfx::{EgfxServerMessage, GfxServerFactory};
+ use crate::handler::RdpServerInputHandler;
++use crate::rdpdr::{RdpdrServer, RdpdrServerFactory};
+ use crate::{SoundServerFactory, builder, capabilities};
+ 
+ /// TCP listen backlog size for the RDP server socket.
+@@ -165,6 +166,7 @@
  ///     async fn validate(
  ///         &self,
  ///         creds: &Credentials,
@@ -8,7 +89,7 @@
  ///     ) -> Result<CredentialDecision, CredentialValidationError> {
  ///         if creds.username == self.expected_user && creds.password == self.expected_password {
  ///             Ok(CredentialDecision::Accept)
-@@ -187,7 +188,19 @@
+@@ -187,7 +189,19 @@
      /// database driver) should offload the work, for example with
      /// `tokio::task::spawn_blocking`, so the returned future does not stall the
      /// caller's executor. Native-async backends can simply `.await`.
@@ -29,7 +110,7 @@
  }
  
  /// A built-in [`CredentialValidator`] that accepts exactly one fixed set of credentials.
-@@ -208,7 +221,11 @@
+@@ -208,7 +222,11 @@
  
  #[async_trait::async_trait]
  impl CredentialValidator for ExactMatchCredentialValidator {
@@ -42,7 +123,53 @@
          if credentials == &self.expected {
              Ok(CredentialDecision::Accept)
          } else {
-@@ -1349,7 +1366,7 @@
+@@ -439,6 +457,7 @@
+     static_channels: StaticChannelSet,
+     sound_factory: Option<Box<dyn SoundServerFactory>>,
+     cliprdr_factory: Option<Box<dyn CliprdrServerFactory>>,
++    rdpdr_factory: Option<Box<dyn RdpdrServerFactory>>,
+     echo_handle: EchoServerHandle,
+     #[cfg(feature = "egfx")]
+     gfx_factory: Option<Box<dyn GfxServerFactory>>,
+@@ -514,6 +533,7 @@
+         display: Box<dyn RdpServerDisplay>,
+         mut sound_factory: Option<Box<dyn SoundServerFactory>>,
+         mut cliprdr_factory: Option<Box<dyn CliprdrServerFactory>>,
++        mut rdpdr_factory: Option<Box<dyn RdpdrServerFactory>>,
+         connection_handler: Option<Box<dyn ConnectionHandler>>,
+         #[cfg(feature = "egfx")] mut gfx_factory: Option<Box<dyn GfxServerFactory>>,
+         display_suppressed: Option<Arc<AtomicBool>>,
+@@ -523,6 +543,9 @@
+         if let Some(cliprdr) = cliprdr_factory.as_mut() {
+             cliprdr.set_sender(ev_sender.clone());
+         }
++        if let Some(rdpdr) = rdpdr_factory.as_mut() {
++            rdpdr.set_sender(ev_sender.clone());
++        }
+         if let Some(snd) = sound_factory.as_mut() {
+             snd.set_sender(ev_sender.clone());
+         }
+@@ -537,6 +560,7 @@
+             static_channels: StaticChannelSet::new(),
+             sound_factory,
+             cliprdr_factory,
++            rdpdr_factory,
+             echo_handle: EchoServerHandle::new(ev_sender.clone()),
+             #[cfg(feature = "egfx")]
+             gfx_factory,
+@@ -674,6 +698,11 @@
+             acceptor.attach_static_channel(cliprdr);
+         }
+ 
++        if let Some(rdpdr_factory) = self.rdpdr_factory.as_deref() {
++            let processor = rdpdr_factory.build_rdpdr_processor();
++            acceptor.attach_static_channel(RdpdrServer::new(processor));
++        }
++
+         if let Some(factory) = self.sound_factory.as_deref() {
+             let backend = factory.build_backend();
+ 
+@@ -1349,7 +1378,7 @@
          // closing, matching the acceptor's exact-match denial path.
          if let Some(validator) = self.credential_validator.clone() {
              if let Some(creds) = &result.credentials {
@@ -51,3 +178,69 @@
                      Ok(CredentialDecision::Accept) => {
                          debug!("Credential validation accepted");
                      }
+--- /dev/null
++++ base/src/rdpdr.rs
+@@ -0,0 +1,63 @@
++use core::fmt;
++
++use ironrdp_core::impl_as_any;
++use ironrdp_pdu::PduResult;
++use ironrdp_pdu::gcc::ChannelName;
++use ironrdp_svc::{CompressionCondition, SvcMessage, SvcProcessor, SvcServerProcessor};
++
++use crate::ServerEventSender;
++
++/// Type-erasing wrapper so [`ironrdp_acceptor::Acceptor::attach_static_channel`]
++/// (which requires a concrete, sized `T: SvcServerProcessor`) can host an
++/// embedder-supplied RDPDR server-role processor.
++///
++/// Unlike CLIPRDR, `ironrdp-rdpdr` only implements the *client* role
++/// (`SvcClientProcessor`) — RDPDR's grammar is inherently
++/// "client announces devices, server drives I/O against them," so nothing
++/// upstream needs the server role. The embedder (Warpgate) builds and owns
++/// the actual server-role state machine; this wrapper just lets it be
++/// attached to the channel set without `ironrdp-server` knowing its concrete
++/// type.
++pub struct RdpdrServer {
++    inner: Box<dyn SvcServerProcessor>,
++}
++
++impl RdpdrServer {
++    pub fn new(inner: Box<dyn SvcServerProcessor>) -> Self {
++        Self { inner }
++    }
++}
++
++impl fmt::Debug for RdpdrServer {
++    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
++        f.debug_struct("RdpdrServer").finish_non_exhaustive()
++    }
++}
++
++impl_as_any!(RdpdrServer);
++
++impl SvcProcessor for RdpdrServer {
++    fn channel_name(&self) -> ChannelName {
++        self.inner.channel_name()
++    }
++
++    fn compression_condition(&self) -> CompressionCondition {
++        self.inner.compression_condition()
++    }
++
++    fn start(&mut self) -> PduResult<Vec<SvcMessage>> {
++        self.inner.start()
++    }
++
++    fn process(&mut self, payload: &[u8]) -> PduResult<Vec<SvcMessage>> {
++        self.inner.process(payload)
++    }
++}
++
++impl SvcServerProcessor for RdpdrServer {}
++
++/// Builds the RDPDR server-role processor for a connection. Set via
++/// [`crate::RdpServerBuilder::with_rdpdr_factory`].
++pub trait RdpdrServerFactory: ServerEventSender + Send {
++    fn build_rdpdr_processor(&self) -> Box<dyn SvcServerProcessor>;
++}

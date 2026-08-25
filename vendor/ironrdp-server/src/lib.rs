@@ -18,10 +18,12 @@ mod gfx;
 mod handler;
 #[cfg(feature = "helper")]
 mod helper;
+mod rdpdr;
 mod server;
 mod sound;
 
 pub use clipboard::CliprdrServerFactory;
+pub use rdpdr::{RdpdrServer, RdpdrServerFactory};
 pub use display::{
     BitmapUpdate, ColorPointer, DesktopSize, DisplayUpdate, Framebuffer, PixelFormat, RGBAPointer, RdpServerDisplay,
     RdpServerDisplayUpdates,

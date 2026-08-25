@@ -47,6 +47,7 @@ mod clipboard;
 mod hold_screen;
 mod protocol;
 mod rdp;
+mod rdpdr;
 
 use bridge::{DialError, connect_backend};
 use hold_screen::{close_with_message, run_banner_screen, run_credential_screen, run_hold_screen};

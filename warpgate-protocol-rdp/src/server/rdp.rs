@@ -27,6 +27,7 @@ use warpgate_desktop_ui::DEFAULT_SIZE;
 
 use super::clipboard::ViewerClipboard;
 use super::protocol::{AuthVerdict, Event, Input};
+use super::rdpdr::ViewerRdpdr;
 
 /// Upper bound on a single framebuffer update, and so on the desktop size we will accept
 /// from a viewer: a full-screen BGRA frame has to stay a sane allocation.
@@ -138,6 +139,10 @@ where
         .with_honor_client_desktop_size(true)
         .with_credential_validator(Some(validator))
         .with_cliprdr_factory(Some(Box::new(clipboard)))
+        // Phase 1 of the RDP + Hello smart-card bridge (ARCHITECTURE_TECHNIQUE.md
+        // §10): negotiate the RDPDR channel and log announced devices, no I/O
+        // response handling yet.
+        .with_rdpdr_factory(Some(Box::new(ViewerRdpdr)))
         .build();
 
     if let Err(error) = server.run_connection(stream).await {
