@@ -41,12 +41,17 @@ use tracing::info;
 
 /// Server-role RDPDR handshake state, per [MS-RDPEFS] 1.3.2's connection
 /// sequence, driven from our side instead of a real Windows host.
+///
+/// `AwaitingCapabilityResponseAndDeviceList` covers *two* client replies
+/// (Client Core Capability Response, Client Device List Announce) that can
+/// arrive in either order — see the root-cause note on
+/// [`RdpdrServerChannel::handle_client_name_request`] for why this can't be
+/// two sequential states.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum State {
     AwaitingAnnounceReply,
     AwaitingNameRequest,
-    AwaitingCapabilityResponse,
-    AwaitingDeviceListAnnounce,
+    AwaitingCapabilityResponseAndDeviceList,
     Done,
 }
 
@@ -144,6 +149,34 @@ impl RdpdrServerChannel {
         Ok(Vec::new())
     }
 
+    /// [MS-RDPEFS] 2.2.2.9 Client Name Request handler — sends *both*
+    /// Server Core Capability Request and Server Client ID Confirm in the
+    /// same reply, per the spec's own prose in "Protocol Initialization":
+    /// "After sending its Server Core Capability Request message, the
+    /// server also sends a Server Client ID Confirm message" — i.e. the
+    /// second send is not gated on receiving Client Core Capability
+    /// Response first.
+    ///
+    /// **Root cause of the Phase-1 blocker (25 Aug 2026, see
+    /// `ARCHITECTURE_TECHNIQUE.md` §10):** the original code sent Server
+    /// Client ID Confirm only *after* receiving Client Core Capability
+    /// Response, an ordering the spec doesn't require. A real `mstsc.exe`
+    /// never sent that response — it silently abandoned the channel,
+    /// confirmed at the `ironrdp_svc`/`ironrdp_acceptor` trace layer (zero
+    /// further bytes on the RDPDR channel for the rest of the session).
+    /// The likely explanation: the client's own RDPDR state machine holds
+    /// off on the capability response until it has the client ID confirmed
+    /// — a two-way wait where each side waits on the other, which our
+    /// gating created but the client (correctly, per spec) didn't expect.
+    /// Sending both messages together, undoing the artificial dependency,
+    /// resolves it.
+    fn handle_client_name_request(&mut self) -> PduResult<Vec<SvcMessage>> {
+        self.state = State::AwaitingCapabilityResponseAndDeviceList;
+        let mut messages = self.send_server_capability_request()?;
+        messages.extend(self.send_server_client_id_confirm()?);
+        Ok(messages)
+    }
+
     /// [MS-RDPEFS] 2.2.2.7 Server Core Capability Request. Advertises
     /// General (mandatory) and Smartcard — the only device class this
     /// phase cares about; the client's device list announce that follows
@@ -163,7 +196,9 @@ impl RdpdrServerChannel {
 
     /// [MS-RDPEFS] 2.2.2.6 Server Client ID Confirm — echoes [`CLIENT_ID`]
     /// back; triggers the client to send its (pre-logon) device list,
-    /// which is what unblocks [`Self::handle_device_list_announce`].
+    /// which is what unblocks [`Self::handle_device_list_announce`]. Sent
+    /// alongside the capability request, not gated on the client's
+    /// capability response — see [`Self::handle_client_name_request`].
     fn send_server_client_id_confirm(&mut self) -> PduResult<Vec<SvcMessage>> {
         let req = RdpdrPdu::VersionAndIdPdu(VersionAndIdPdu {
             version_major: VERSION_MAJOR,
@@ -216,20 +251,33 @@ impl SvcProcessor for RdpdrServerChannel {
             }
             (State::AwaitingNameRequest, PacketId::CoreClientName) => {
                 info!("RDPDR: received Client Name Request");
-                self.state = State::AwaitingCapabilityResponse;
-                self.send_server_capability_request()
+                self.handle_client_name_request()
             }
-            (State::AwaitingCapabilityResponse, PacketId::CoreClientCapability) => {
+            // These two replies can arrive in either order — see
+            // `handle_client_name_request`'s doc comment — so both are
+            // accepted throughout this state, and only
+            // `CoreDevicelistAnnounce` advances past it.
+            (State::AwaitingCapabilityResponseAndDeviceList, PacketId::CoreClientCapability) => {
                 let resp = CoreCapability::decode(header, &mut src).map_err(|e| decode_err!(e))?;
                 info!(
                     num_capabilities = resp.capabilities.len(),
                     "RDPDR: received Client Core Capability Response"
                 );
-                self.state = State::AwaitingDeviceListAnnounce;
-                self.send_server_client_id_confirm()
+                Ok(Vec::new())
             }
-            (State::AwaitingDeviceListAnnounce, PacketId::CoreDevicelistAnnounce) => {
+            (State::AwaitingCapabilityResponseAndDeviceList, PacketId::CoreDevicelistAnnounce) => {
                 self.handle_device_list_announce(&mut src)
+            }
+            // Client Core Capability Response can also land after the
+            // device list, for the same either-order reason — tolerate it
+            // once `Done` instead of erroring the channel.
+            (State::Done, PacketId::CoreClientCapability) => {
+                let resp = CoreCapability::decode(header, &mut src).map_err(|e| decode_err!(e))?;
+                info!(
+                    num_capabilities = resp.capabilities.len(),
+                    "RDPDR: received Client Core Capability Response (after device list)"
+                );
+                Ok(Vec::new())
             }
             (state, packet_id) => {
                 tracing::warn!(?state, %packet_id, "RDPDR: unexpected packet for current state");
