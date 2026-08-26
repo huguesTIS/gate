@@ -113,7 +113,7 @@ async fn upgrade_rustls(
 }
 
 fn build_rustls_config(verify: bool) -> Result<rustls::client::ClientConfig> {
-    let config = if verify {
+    let mut config = if verify {
         let mut roots = rustls::RootCertStore::empty();
         for cert in native_root_certificates() {
             roots.add(cert).ok();
@@ -129,6 +129,14 @@ fn build_rustls_config(verify: bool) -> Result<rustls::client::ClientConfig> {
             .with_custom_certificate_verifier(Arc::new(danger::NoCertificateVerification))
             .with_no_client_auth()
     };
+
+    // Opt-in TLS session key logging for Wireshark decryption (target-facing leg) — see
+    // `ARCHITECTURE_TECHNIQUE.md` §10, prep for a future RDPDR capture. `KeyLogFile::new()`
+    // reads `SSLKEYLOGFILE` itself (same convention curl/OpenSSL/browsers use); a no-op when
+    // unset, so this has no effect outside deliberate debugging.
+    if std::env::var_os("SSLKEYLOGFILE").is_some() {
+        config.key_log = Arc::new(rustls::KeyLogFile::new());
+    }
 
     Ok(config)
 }

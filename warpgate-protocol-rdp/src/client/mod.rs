@@ -41,6 +41,7 @@ use tracing::{debug, warn};
 use warpgate_common::{RdpTargetAuth, TargetRdpOptions};
 use warpgate_core::{DesktopEvent, DesktopInput, DesktopRect, DesktopState};
 
+use crate::ScardRelayState;
 use crate::clipboard::{Clipboard, ClipboardSink, TextClipboard};
 use crate::client::rdpdr::{SMARTCARD_DEVICE_ID, TargetRdpdr};
 
@@ -83,6 +84,7 @@ pub async fn run(
     event_tx: Sender<DesktopEvent>,
     input_rx: Receiver<DesktopInput>,
     mut abort_rx: UnboundedReceiver<()>,
+    scard_relay: Option<ScardRelayState>,
 ) -> Result<()> {
     event_tx
         .send(DesktopEvent::State(DesktopState::Connecting))
@@ -129,6 +131,7 @@ pub async fn run(
             options.tls_security(),
             clipboard.backend(),
             rdpdr_tx,
+            scard_relay,
         ),
     )
     .await
@@ -710,6 +713,7 @@ async fn connect(
     tls_security: warpgate_common::RdpTlsSecurity,
     clipboard: TextClipboard<ClientClipboardSink>,
     rdpdr_tx: UnboundedSender<SvcMessage>,
+    scard_relay: Option<ScardRelayState>,
 ) -> Result<(ConnectionResult, Framed)> {
     let tcp_stream = tokio::time::timeout(
         CONNECT_TIMEOUT,
@@ -737,8 +741,11 @@ async fn connect(
         )
         .with_static_channel(CliprdrClient::new(Box::new(clipboard)))
         .with_static_channel(
-            Rdpdr::new(Box::new(TargetRdpdr::new(rdpdr_tx)), "warpgate".to_owned())
-                .with_smartcard(SMARTCARD_DEVICE_ID),
+            Rdpdr::new(
+                Box::new(TargetRdpdr::new(rdpdr_tx, scard_relay)),
+                "warpgate".to_owned(),
+            )
+            .with_smartcard(SMARTCARD_DEVICE_ID),
         );
 
     let should_upgrade = ironrdp_tokio::connect_begin(&mut framed, &mut connector)

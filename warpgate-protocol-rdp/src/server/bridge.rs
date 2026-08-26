@@ -125,6 +125,7 @@ pub(super) async fn connect_backend(
     authorization: TargetAuthorization,
     options: TargetRdpOptions,
     screen: warpgate_desktop_ui::Screen,
+    scard_relay: crate::ScardRelayState,
 ) -> Result<BackendBridge, DialError> {
     let (user_info, target) = authorization.into_parts();
     {
@@ -143,7 +144,7 @@ pub(super) async fn connect_backend(
         mut event_rx,
         input_tx,
         abort_tx,
-    } = crate::connect(options, (screen.width, screen.height));
+    } = crate::connect(options, (screen.width, screen.height), Some(scard_relay));
 
     let outcome = tokio::time::timeout(DIAL_OUTCOME_TIMEOUT, async {
         loop {

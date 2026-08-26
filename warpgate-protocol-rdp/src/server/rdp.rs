@@ -28,6 +28,7 @@ use warpgate_desktop_ui::DEFAULT_SIZE;
 use super::clipboard::ViewerClipboard;
 use super::protocol::{AuthVerdict, Event, Input};
 use super::rdpdr::ViewerRdpdr;
+use crate::ScardRelayState;
 
 /// Upper bound on a single framebuffer update, and so on the desktop size we will accept
 /// from a viewer: a full-screen BGRA frame has to stay a sane allocation.
@@ -51,6 +52,7 @@ pub fn run_on_thread<S>(
     size: (u16, u16),
     out_tx: mpsc::UnboundedSender<Event>,
     in_rx: mpsc::Receiver<Input>,
+    scard_relay: ScardRelayState,
 ) -> oneshot::Receiver<Result<()>>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
@@ -67,7 +69,7 @@ where
                 return;
             }
         };
-        let result = runtime.block_on(run(stream, cert_pem, key_pem, size, out_tx, in_rx));
+        let result = runtime.block_on(run(stream, cert_pem, key_pem, size, out_tx, in_rx, scard_relay));
         let _ = done_tx.send(result);
     });
     done_rx
@@ -81,6 +83,7 @@ async fn run<S>(
     size: (u16, u16),
     out_tx: mpsc::UnboundedSender<Event>,
     in_rx: mpsc::Receiver<Input>,
+    scard_relay: ScardRelayState,
 ) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + Sync + 'static,
@@ -139,10 +142,10 @@ where
         .with_honor_client_desktop_size(true)
         .with_credential_validator(Some(validator))
         .with_cliprdr_factory(Some(Box::new(clipboard)))
-        // Phase 1 of the RDP + Hello smart-card bridge (ARCHITECTURE_TECHNIQUE.md
-        // §10): negotiate the RDPDR channel and log announced devices, no I/O
-        // response handling yet.
-        .with_rdpdr_factory(Some(Box::new(ViewerRdpdr)))
+        // RDP + Hello smart-card bridge (ARCHITECTURE_TECHNIQUE.md §10): negotiates the
+        // RDPDR channel (Phase 1) and relays the "cheap" smart-card calls to the viewer's
+        // real reader (Phase 3) via `scard_relay`, shared with the target-facing connector.
+        .with_rdpdr_factory(Some(Box::new(ViewerRdpdr::new(scard_relay))))
         .build();
 
     if let Err(error) = server.run_connection(stream).await {
@@ -170,10 +173,17 @@ fn build_tls_acceptor(cert_pem: &str, key_pem: &str) -> Result<TlsAcceptor> {
         .context("parsing TLS private key PEM")?
         .context("no private key found in TLS private key PEM")?;
 
-    let config = TlsServerConfig::builder()
+    let mut config = TlsServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .context("building rustls server config")?;
+
+    // Opt-in TLS session key logging for Wireshark decryption (viewer-facing leg) — see
+    // `ARCHITECTURE_TECHNIQUE.md` §10, prep for a future RDPDR capture. `KeyLogFile::new()`
+    // reads `SSLKEYLOGFILE` itself; a no-op when unset.
+    if std::env::var_os("SSLKEYLOGFILE").is_some() {
+        config.key_log = Arc::new(rustls::KeyLogFile::new());
+    }
 
     Ok(TlsAcceptor::from(Arc::new(config)))
 }

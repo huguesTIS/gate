@@ -8,11 +8,13 @@
 
 mod client;
 mod clipboard;
+mod scard_relay;
 mod server;
 mod session_handle;
 
 use anyhow::Context;
 use futures::future::BoxFuture;
+pub use scard_relay::ScardRelayState;
 pub use server::bind_server;
 use tokio::sync::mpsc::{Receiver, Sender, UnboundedSender, channel, unbounded_channel};
 use tracing::{Instrument, error, info_span};
@@ -79,7 +81,17 @@ pub struct RdpClientHandles {
 }
 
 /// Start an RDP client for a target and bridge it to normalised desktop streams.
-pub fn connect(options: TargetRdpOptions, size: (u16, u16)) -> RdpClientHandles {
+///
+/// `scard_relay` is the RDP + Hello smart-card bridge's shared correlation state
+/// (`ARCHITECTURE_TECHNIQUE.md` §10, Phase 3) — `None` when the caller has no viewer-facing
+/// RDPDR channel to relay through (there isn't one for the web-desktop path, only the native
+/// RDP server front end wires one up), in which case the target-facing smart card backend
+/// answers every call itself (Phase 2's canned "no card" responses) rather than relaying.
+pub fn connect(
+    options: TargetRdpOptions,
+    size: (u16, u16),
+    scard_relay: Option<ScardRelayState>,
+) -> RdpClientHandles {
     let (event_tx, event_rx) = channel::<DesktopEvent>(1024);
     let (input_tx, input_rx) = channel::<DesktopInput>(DESKTOP_INPUT_CHANNEL_CAPACITY);
     let (abort_tx, abort_rx) = unbounded_channel::<()>();
@@ -88,7 +100,7 @@ pub fn connect(options: TargetRdpOptions, size: (u16, u16)) -> RdpClientHandles 
     tokio::spawn(
         async move {
             if let Err(error) =
-                client::run(options, size, event_tx.clone(), input_rx, abort_rx).await
+                client::run(options, size, event_tx.clone(), input_rx, abort_rx, scard_relay).await
             {
                 let error_chain = format!("{error:#}");
                 error!(%error, %error_chain, "RDP client failed");

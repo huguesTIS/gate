@@ -104,9 +104,13 @@ impl WebDesktopClientManager {
             TargetOptions::Rdp(options) => {
                 // Connect at the viewer's measured size when known, so the desktop fits the
                 // browser from the first frame; the DVC resize path handles later changes.
+                // No viewer-facing RDPDR channel exists for the browser path (no native
+                // client, no smart card to relay from) — see `ARCHITECTURE_TECHNIQUE.md`
+                // §10 on why that bridge is native-client-only.
                 let h = warpgate_protocol_rdp::connect(
                     options,
                     size.unwrap_or(warpgate_protocol_rdp::DEFAULT_SIZE),
+                    None,
                 );
                 // The RDP helper only ever emits raw RGBA.
                 (h.event_rx, h.input_tx, h.abort_tx, true)

@@ -170,6 +170,11 @@ async fn handle_connection(
     // stream is not, so the server runs against an in-memory duplex and we relay the raw
     // (TLS) RDP bytes across.
     let (server_side, mut relay_side) = tokio::io::duplex(RELAY_BUFFER_BYTES);
+    // RDP + Hello smart-card bridge (ARCHITECTURE_TECHNIQUE.md §10) — one relay state per
+    // session, shared between the viewer-facing RDPDR channel (runs on `rdp::run_on_thread`'s
+    // dedicated OS thread) and the target-facing connector (dialed later, from `control_loop`,
+    // once auth succeeds).
+    let scard_relay = crate::ScardRelayState::new();
     let mut rdp_done = rdp::run_on_thread(
         server_side,
         cert_pem,
@@ -177,12 +182,13 @@ async fn handle_connection(
         (DEFAULT_SCREEN_W, DEFAULT_SCREEN_H),
         server_out_tx,
         server_in_rx,
+        scard_relay.clone(),
     );
 
     // Run the RDP server and the control loop concurrently; whichever ends first tears
     // the session down.
     tokio::select! {
-        result = control_loop(services, server_handle, remote_address, server_out_rx, server_in_tx) => {
+        result = control_loop(services, server_handle, remote_address, server_out_rx, server_in_tx, scard_relay) => {
             result?;
         }
         result = &mut rdp_done => {
@@ -210,6 +216,7 @@ async fn control_loop(
     remote_address: SocketAddr,
     mut events: UnboundedReceiver<ServerEvent>,
     server_in_tx: Sender<ServerInput>,
+    scard_relay: crate::ScardRelayState,
 ) -> Result<()> {
     let mut backend: Option<BackendBridge> = None;
     // Authorized target awaiting the first `Size` event before we dial it. The RDP
@@ -293,6 +300,7 @@ async fn control_loop(
                                     &server_in_tx,
                                     &mut screen,
                                     keyboard_layout,
+                                    scard_relay.clone(),
                                 )
                                 .await?;
                             }
@@ -348,6 +356,7 @@ async fn control_loop(
                                             &server_in_tx,
                                             &mut screen,
                                             keyboard_layout,
+                                            scard_relay.clone(),
                                         )
                                         .await?;
                                     }
@@ -407,6 +416,7 @@ async fn control_loop(
                     &server_in_tx,
                     &mut screen,
                     keyboard_layout,
+                    scard_relay.clone(),
                 )
                 .await?;
                 continue;
@@ -446,6 +456,7 @@ async fn control_loop(
             &server_in_tx,
             &mut screen,
             keyboard_layout,
+            scard_relay.clone(),
         )
         .await?;
 
@@ -526,6 +537,7 @@ async fn dial_if_pending(
     server_in_tx: &Sender<ServerInput>,
     screen: &mut warpgate_desktop_ui::Screen,
     keyboard_layout: u32,
+    scard_relay: crate::ScardRelayState,
 ) -> Result<()> {
     let Some((authorization, mut options)) = (if backend.is_none() {
         pending.take()
@@ -562,6 +574,7 @@ async fn dial_if_pending(
             authorization.clone(),
             options.clone(),
             *screen,
+            scard_relay.clone(),
         )
         .await
         {
