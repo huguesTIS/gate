@@ -13,6 +13,9 @@ temp
 host_key*
 .vscode
 
+# Local debugging artifacts (pcaps, TLS keylogs, etc.) - never commit, may contain secrets
+debug-artifacts/
+
 # ---
 
 data
