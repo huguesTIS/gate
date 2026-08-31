@@ -77,6 +77,7 @@ serde = { version = "1.0", features = ["derive"], default-features = false }
 serde_json = { version = "1.0", default-features = false }
 russh = { version = "0.63.0", features = [
     "des",
+    "dsa",
     "rsa",
     "aws-lc-rs",
 ], default-features = false }
@@ -204,7 +205,6 @@ debug = "line-tables-only"
 
 [profile.release]
 lto = true
-panic = "abort"
 strip = "debuginfo"
 
 [profile.release-no-lto]

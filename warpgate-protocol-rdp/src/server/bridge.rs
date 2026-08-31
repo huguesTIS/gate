@@ -185,5 +185,6 @@ pub(super) async fn connect_backend(
         abort_tx,
         frame_bridge,
         recorder,
+        dialed_at: Some(screen),
     })
 }
