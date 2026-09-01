@@ -99,6 +99,9 @@ mod m00086_winrm_credentials;
 // `.id` (the column m00087 removes) — grepped before merging, not assumed.
 mod m00087_assignment_composite_pks;
 mod m00088_unique_target_and_group_names;
+mod m00089_portal_favorites;
+mod m00090_portal_saved_views;
+mod m00091_portal_saved_view_shares;
 
 pub(crate) mod helpers;
 
@@ -196,6 +199,9 @@ impl MigratorTrait for Migrator {
             Box::new(m00086_winrm_credentials::Migration),
             Box::new(m00087_assignment_composite_pks::Migration),
             Box::new(m00088_unique_target_and_group_names::Migration),
+            Box::new(m00089_portal_favorites::Migration),
+            Box::new(m00090_portal_saved_views::Migration),
+            Box::new(m00091_portal_saved_view_shares::Migration),
         ]
     }
 }

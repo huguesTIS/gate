@@ -1,0 +1,30 @@
+{
+    "name": "warpgate-web-portal",
+    "private": true,
+    "version": "0.0.0",
+    "type": "module",
+    "scripts": {
+        "build": "npm run check && vite build",
+        "devbuild": "NODE_ENV=development vite build --mode development --minify false",
+        "watch": "concurrently -k -n vite,check -c blue,yellow npm:watch:vite npm:watch:check",
+        "watch:vite": "NODE_ENV=development vite build -w --mode development --minify false",
+        "watch:check": "npm run check -- --watch",
+        "check": "svelte-check --tsconfig ./tsconfig.json",
+        "lint": "npm run biome && svelte-check",
+        "biome": "biome",
+        "format": "biome check --fix && biome format --fix"
+    },
+    "devDependencies": {
+        "@biomejs/biome": "^2.5.9",
+        "@sveltejs/vite-plugin-svelte": "^7.3.0",
+        "@tsconfig/svelte": "^5.0.8",
+        "@xterm/addon-fit": "^0.11",
+        "@xterm/xterm": "^6.0",
+        "svelte": "^5.56.9",
+        "svelte-check": "^4.7.6",
+        "svelte-preprocess": "^6.0.5",
+        "tslib": "^2.8.0",
+        "typescript": "^5.9.3",
+        "vite": "^8.2.1"
+    }
+}

@@ -6,6 +6,10 @@ mod auth_scheme;
 mod common;
 mod credentials;
 pub mod info;
+pub mod portal_favorites;
+pub mod portal_saved_views;
+pub mod portal_session_history;
+pub mod portal_target_labels;
 pub mod sso_provider_detail;
 pub mod sso_provider_list;
 pub mod targets_list;
@@ -25,6 +29,10 @@ pub fn get() -> impl OpenApi {
         api_tokens::Api,
         ticket_requests::Api,
         ticket_request_targets::Api,
+        portal_favorites::Api,
+        portal_saved_views::Api,
+        portal_session_history::Api,
+        portal_target_labels::Api,
         web_ssh::Api,
         web_desktop::Api,
     )

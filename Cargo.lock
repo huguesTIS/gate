@@ -9481,6 +9481,7 @@ dependencies = [
  "warpgate-tls",
  "warpgate-web",
  "warpgate-web-desktop",
+ "warpgate-web-portal",
  "warpgate-web-ssh",
 ]
 
@@ -9807,6 +9808,16 @@ dependencies = [
  "warpgate-protocol-vnc",
  "warpgate-web-clients-common",
  "zune-jpeg",
+]
+
+[[package]]
+name = "warpgate-web-portal"
+version = "0.28.5"
+dependencies = [
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
 ]
 
 [[package]]

@@ -29,6 +29,7 @@ members = [
     "warpgate-web",
     "warpgate-web-clients-common",
     "warpgate-web-desktop",
+    "warpgate-web-portal",
     "warpgate-web-ssh",
 ]
 # Vendored third-party forks (path deps / patches). They are excluded from the workspace

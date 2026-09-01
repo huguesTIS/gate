@@ -55,6 +55,10 @@ macro_rules! with_every_table_in_order {
             AccessPolicy,
             AccessPolicyAction,
             ActionExecution,
+            PortalFavorite,
+            PortalSavedView,
+            PortalSavedViewTarget,
+            PortalSavedViewShare,
         ];
     };
 }

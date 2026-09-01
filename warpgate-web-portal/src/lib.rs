@@ -1,0 +1,40 @@
+use std::collections::HashMap;
+
+use rust_embed::RustEmbed;
+use serde::Deserialize;
+
+/// Built by `npm run build` in this crate's directory into `dist/`. See
+/// `ARCHITECTURE_TECHNIQUE.md` §13's "Objectif reformulé" subsection for why this crate
+/// exists separately from `warpgate-web` (upstream conflict avoidance).
+#[derive(RustEmbed)]
+#[folder = "../warpgate-web-portal/dist"]
+pub struct Assets;
+
+#[derive(thiserror::Error, Debug)]
+pub enum LookupError {
+    #[error("I/O")]
+    Io(#[from] std::io::Error),
+
+    #[error("Serde")]
+    Serde(#[from] serde_json::Error),
+
+    #[error("File not found in manifest")]
+    FileNotFound,
+
+    #[error("Manifest not found")]
+    ManifestNotFound,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct ManifestEntry {
+    pub file: String,
+    pub css: Option<Vec<String>>,
+}
+
+pub fn lookup_built_file(source: &str) -> Result<ManifestEntry, LookupError> {
+    let file = Assets::get(".vite/manifest.json").ok_or(LookupError::ManifestNotFound)?;
+
+    let obj: HashMap<String, ManifestEntry> = serde_json::from_slice(&file.data)?;
+
+    obj.get(source).cloned().ok_or(LookupError::FileNotFound)
+}

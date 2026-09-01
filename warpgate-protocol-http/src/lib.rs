@@ -41,6 +41,7 @@ use warpgate_db_entities::Parameters::RecordingsStorageConfig;
 use warpgate_tls::{TlsCertificateAndPrivateKey, TlsCertificateBundle, TlsPrivateKey};
 use warpgate_web::Assets;
 use warpgate_web_desktop::WebDesktopClientManager;
+use warpgate_web_portal::Assets as PortalAssets;
 use warpgate_web_desktop::api::ws_handler as desktop_web_client_ws_handler;
 use warpgate_web_ssh::WebSshClientManager;
 use warpgate_web_ssh::api::ws_handler as ssh_web_client_ws_handler;
@@ -244,6 +245,18 @@ impl ProtocolServer for HTTPProtocolServer {
                             }
                             Ok(resp)
                         }),
+                )
+                .nest_no_strip(
+                    "/portal/assets",
+                    EmbeddedFilesEndpoint::<PortalAssets>::new().with(cache_static()),
+                )
+                .at(
+                    // Same pattern as `/admin` above: served unauthenticated, the SPA
+                    // checks the session client-side (`GET /api/info`) and redirects to
+                    // `/login` itself. See ARCHITECTURE_TECHNIQUE.md §13.
+                    "/portal",
+                    EmbeddedFileEndpoint::<PortalAssets>::new("src/portal/index.html")
+                        .with(cache_bust()),
                 )
                 .at(
                     "/api/auth/web-auth-requests/stream",
